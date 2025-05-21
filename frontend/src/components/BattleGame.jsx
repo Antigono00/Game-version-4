@@ -14,6 +14,12 @@ import { determineAIAction } from '../utils/battleAI';
 import { processAttack, applyTool, applySpell, defendCreature } from '../utils/battleCore';
 import { generateEnemyCreatures, getDifficultySettings } from '../utils/difficultySettings';
 
+// Constants for battle mechanics
+const ATTACK_ENERGY_COST = 2; // Energy cost for attacks
+const DEFEND_ENERGY_COST = 1; // Energy cost for defending
+const BASE_ENERGY_REGEN = 4; // Base energy regeneration per turn
+const ENERGY_STAT_MULTIPLIER = 0.1; // Reduced from 0.2 to 0.1 per energy point
+
 // Action types for our reducer
 const ACTIONS = {
   START_BATTLE: 'START_BATTLE',
@@ -30,7 +36,8 @@ const ACTIONS = {
   INCREMENT_TURN: 'INCREMENT_TURN',
   SET_GAME_STATE: 'SET_GAME_STATE',
   APPLY_ONGOING_EFFECTS: 'APPLY_ONGOING_EFFECTS',
-  ADD_LOG: 'ADD_LOG'
+  ADD_LOG: 'ADD_LOG',
+  SPEND_ENERGY: 'SPEND_ENERGY' // New action to spend energy
 };
 
 // Battle state reducer to consolidate multiple state updates
@@ -103,8 +110,19 @@ const battleReducer = (state, action) => {
       const isPlayerAttacker = state.playerField.some(c => c.id === attackResult.updatedAttacker.id);
       const isPlayerDefender = state.playerField.some(c => c.id === attackResult.updatedDefender.id);
       
+      // Spend energy for attack - depending on who's attacking
+      const updatedPlayerEnergy = isPlayerAttacker 
+        ? state.playerEnergy - action.energyCost 
+        : state.playerEnergy;
+        
+      const updatedEnemyEnergy = !isPlayerAttacker 
+        ? state.enemyEnergy - action.energyCost 
+        : state.enemyEnergy;
+      
       return {
         ...state,
+        playerEnergy: updatedPlayerEnergy,
+        enemyEnergy: updatedEnemyEnergy,
         playerField: state.playerField.map(c => {
           if (isPlayerAttacker && c.id === attackResult.updatedAttacker.id) {
             return attackResult.updatedAttacker;
@@ -169,8 +187,20 @@ const battleReducer = (state, action) => {
     
     case ACTIONS.DEFEND:
       const isPlayerDefending = state.playerField.some(c => c.id === action.updatedCreature.id);
+      
+      // Spend energy for defend based on who's defending
+      const playerEnergyAfterDefend = isPlayerDefending 
+        ? state.playerEnergy - DEFEND_ENERGY_COST 
+        : state.playerEnergy;
+        
+      const enemyEnergyAfterDefend = !isPlayerDefending 
+        ? state.enemyEnergy - DEFEND_ENERGY_COST 
+        : state.enemyEnergy;
+      
       return {
         ...state,
+        playerEnergy: playerEnergyAfterDefend,
+        enemyEnergy: enemyEnergyAfterDefend,
         playerField: isPlayerDefending
           ? state.playerField.map(c => c.id === action.updatedCreature.id ? action.updatedCreature : c)
           : state.playerField,
@@ -178,6 +208,20 @@ const battleReducer = (state, action) => {
           ? state.enemyField.map(c => c.id === action.updatedCreature.id ? action.updatedCreature : c)
           : state.enemyField
       };
+    
+    case ACTIONS.SPEND_ENERGY:
+      // General action for spending energy
+      if (action.player === 'player') {
+        return {
+          ...state,
+          playerEnergy: Math.max(0, state.playerEnergy - action.amount)
+        };
+      } else {
+        return {
+          ...state,
+          enemyEnergy: Math.max(0, state.enemyEnergy - action.amount)
+        };
+      }
     
     case ACTIONS.DRAW_CARD:
       if (action.player === 'player') {
@@ -199,7 +243,7 @@ const battleReducer = (state, action) => {
       }
     
     case ACTIONS.REGENERATE_ENERGY:
-      // New energy regeneration logic - adds to current energy instead of resetting
+      // Reduced energy regeneration from creature stats
       return {
         ...state,
         playerEnergy: Math.min(15, state.playerEnergy + action.playerRegen),
@@ -233,15 +277,35 @@ const battleReducer = (state, action) => {
         const activeEffects = updatedCreature.activeEffects || [];
         if (activeEffects.length > 0) {
           const remainingEffects = [];
+          let effectLog = [];
           
           activeEffects.forEach(effect => {
             // Apply effect
             if (effect.healthEffect) {
               // Apply health change
+              const previousHealth = updatedCreature.currentHealth;
               updatedCreature.currentHealth = Math.min(
                 updatedCreature.battleStats.maxHealth,
                 Math.max(0, updatedCreature.currentHealth + effect.healthEffect)
               );
+              
+              // Log health changes for UI feedback
+              const healthChange = updatedCreature.currentHealth - previousHealth;
+              if (healthChange !== 0) {
+                const changeType = healthChange > 0 ? 'healed' : 'damaged';
+                const amount = Math.abs(healthChange);
+                effectLog.push(`${updatedCreature.species_name} ${changeType} for ${amount} from ${effect.name}`);
+              }
+            }
+            
+            // Apply stat effects if any
+            if (effect.statEffect) {
+              // Apply stats
+              Object.entries(effect.statEffect).forEach(([stat, value]) => {
+                if (updatedCreature.battleStats[stat] !== undefined) {
+                  updatedCreature.battleStats[stat] += value;
+                }
+              });
             }
             
             // Decrement duration
@@ -250,11 +314,18 @@ const battleReducer = (state, action) => {
             // Keep effect if duration is still > 0
             if (updatedEffect.duration > 0) {
               remainingEffects.push(updatedEffect);
+            } else {
+              effectLog.push(`${effect.name} effect has expired on ${updatedCreature.species_name}`);
             }
           });
           
           // Update creature active effects
           updatedCreature.activeEffects = remainingEffects;
+          
+          // Add effect log to state for UI feedback
+          if (effectLog.length > 0 && action.addLog) {
+            action.addLog(effectLog.join('. '));
+          }
         }
         
         // Reset defending status (lasts only one turn)
@@ -273,15 +344,35 @@ const battleReducer = (state, action) => {
         const activeEffects = updatedCreature.activeEffects || [];
         if (activeEffects.length > 0) {
           const remainingEffects = [];
+          let effectLog = [];
           
           activeEffects.forEach(effect => {
             // Apply effect
             if (effect.healthEffect) {
               // Apply health change
+              const previousHealth = updatedCreature.currentHealth;
               updatedCreature.currentHealth = Math.min(
                 updatedCreature.battleStats.maxHealth,
                 Math.max(0, updatedCreature.currentHealth + effect.healthEffect)
               );
+              
+              // Log health changes for UI feedback
+              const healthChange = updatedCreature.currentHealth - previousHealth;
+              if (healthChange !== 0) {
+                const changeType = healthChange > 0 ? 'healed' : 'damaged';
+                const amount = Math.abs(healthChange);
+                effectLog.push(`Enemy ${updatedCreature.species_name} ${changeType} for ${amount} from ${effect.name}`);
+              }
+            }
+            
+            // Apply stat effects if any
+            if (effect.statEffect) {
+              // Apply stats
+              Object.entries(effect.statEffect).forEach(([stat, value]) => {
+                if (updatedCreature.battleStats[stat] !== undefined) {
+                  updatedCreature.battleStats[stat] += value;
+                }
+              });
             }
             
             // Decrement duration
@@ -290,11 +381,18 @@ const battleReducer = (state, action) => {
             // Keep effect if duration is still > 0
             if (updatedEffect.duration > 0) {
               remainingEffects.push(updatedEffect);
+            } else {
+              effectLog.push(`${effect.name} effect has expired on Enemy ${updatedCreature.species_name}`);
             }
           });
           
           // Update creature active effects
           updatedCreature.activeEffects = remainingEffects;
+          
+          // Add effect log to state for UI feedback
+          if (effectLog.length > 0 && action.addLog) {
+            action.addLog(effectLog.join('. '));
+          }
         }
         
         // Reset defending status
@@ -338,8 +436,9 @@ const battleReducer = (state, action) => {
 };
 
 // ============= CUSTOM AI FUNCTIONS ============= //
-// This modified version of determineEasyAIAction ensures we only select affordable creatures
+// Enhanced AI for Easy difficulty - fixed to always attack when possible
 const determineEasyAIAction = (enemyHand, enemyField, playerField, enemyEnergy, maxFieldSize) => {
+  // ========== DEPLOYMENT LOGIC ==========
   // If no creatures on field and have cards in hand, deploy one
   if (enemyField.length < maxFieldSize && enemyHand.length > 0) {
     // IMPORTANT FIX: Filter for affordable creatures first
@@ -366,45 +465,159 @@ const determineEasyAIAction = (enemyHand, enemyField, playerField, enemyEnergy, 
     }
   }
   
-  // If creatures on field and player has creatures, attack randomly
+  // ========== ATTACK LOGIC ==========
+  // If we have creatures on field and player has creatures, we can attack!
   if (enemyField.length > 0 && playerField.length > 0) {
-    const randomAttacker = enemyField[Math.floor(Math.random() * enemyField.length)];
-    const randomTarget = playerField[Math.floor(Math.random() * playerField.length)];
+    console.log(`AI has ${enemyField.length} creatures on field and player has ${playerField.length} creatures`);
     
-    // 30% chance to defend instead of attack
-    if (Math.random() < 0.3 && !randomAttacker.isDefending) {
+    // Check if we have enough energy to attack
+    if (enemyEnergy >= ATTACK_ENERGY_COST) {
+      console.log(`AI has ${enemyEnergy} energy, which is enough to attack (cost: ${ATTACK_ENERGY_COST})`);
+      
+      // Detailed creature logging
+      console.log("AI creatures on field:", enemyField.map(c => ({
+        name: c.species_name,
+        atk: Math.max(c.battleStats?.physicalAttack || 0, c.battleStats?.magicalAttack || 0),
+        def: Math.min(c.battleStats?.physicalDefense || 0, c.battleStats?.magicalDefense || 0),
+        hp: c.currentHealth,
+        isDefending: c.isDefending
+      })));
+      
+      console.log("Player creatures on field:", playerField.map(c => ({
+        name: c.species_name,
+        atk: Math.max(c.battleStats?.physicalAttack || 0, c.battleStats?.magicalAttack || 0),
+        def: Math.min(c.battleStats?.physicalDefense || 0, c.battleStats?.magicalDefense || 0),
+        hp: c.currentHealth
+      })));
+      
+      // Find a good attacker - preferably not already defending
+      const nonDefendingCreatures = enemyField.filter(c => !c.isDefending);
+      
+      // Choose the best attacker - either a non-defending one, or any if all are defending
+      const attackerPool = nonDefendingCreatures.length > 0 ? nonDefendingCreatures : enemyField;
+      
+      // Find the strongest attacker in the available pool
+      const bestAttacker = attackerPool.reduce((best, current) => {
+        if (!best) return current;
+        
+        const currentAttack = Math.max(
+          current.battleStats?.physicalAttack || 0,
+          current.battleStats?.magicalAttack || 0
+        );
+        
+        const bestAttack = Math.max(
+          best.battleStats?.physicalAttack || 0,
+          best.battleStats?.magicalAttack || 0
+        );
+        
+        return currentAttack > bestAttack ? current : best;
+      }, null);
+      
+      // Find the most vulnerable target
+      const weakestTarget = playerField.reduce((weakest, current) => {
+        if (!weakest) return current;
+        
+        // Consider both health and defense when determining vulnerability
+        const currentDefense = Math.min(
+          current.battleStats?.physicalDefense || 0,
+          current.battleStats?.magicalDefense || 0
+        );
+        
+        const weakestDefense = Math.min(
+          weakest.battleStats?.physicalDefense || 0,
+          weakest.battleStats?.magicalDefense || 0
+        );
+        
+        // Weight health more heavily than defense
+        const currentVulnerability = (current.currentHealth * 2) + currentDefense;
+        const weakestVulnerability = (weakest.currentHealth * 2) + weakestDefense;
+        
+        return currentVulnerability < weakestVulnerability ? current : weakest;
+      }, null);
+      
+      // Generate random number once for decision making
+      const attackRoll = Math.random();
+      console.log(`Attack probability check: ${attackRoll} < 0.8 = ${attackRoll < 0.8}`);
+      
+      // 80% chance to attack in easy mode - INCREASING from 60% to ensure more attacks
+      if (attackRoll < 0.8) {
+        console.log(`AI attacking with ${bestAttacker.species_name} targeting ${weakestTarget.species_name}`);
+        return {
+          type: 'attack',
+          attacker: bestAttacker,
+          target: weakestTarget,
+          energyCost: ATTACK_ENERGY_COST
+        };
+      }
+      
+      // Only defend if needed (low health or player has high attack)
+      const needsDefending = enemyField.find(creature => {
+        // Check if creature health is low
+        const isLowHealth = creature.currentHealth < (creature.battleStats.maxHealth * 0.3);
+        
+        // Check if player has high attack creatures
+        const playerHasHighAttack = playerField.some(playerCreature => {
+          const playerAttack = Math.max(
+            playerCreature.battleStats?.physicalAttack || 0,
+            playerCreature.battleStats?.magicalAttack || 0
+          );
+          
+          return playerAttack > (creature.battleStats?.physicalDefense || 0);
+        });
+        
+        return (isLowHealth || playerHasHighAttack) && !creature.isDefending;
+      });
+      
+      // If someone needs defending and we have the energy, defend
+      if (needsDefending && enemyEnergy >= DEFEND_ENERGY_COST) {
+        console.log(`AI defending with ${needsDefending.species_name} because it's vulnerable`);
+        return {
+          type: 'defend',
+          creature: needsDefending,
+          energyCost: DEFEND_ENERGY_COST
+        };
+      }
+      
+      // Default to attack if we got this far
+      console.log(`AI attacking by default with ${bestAttacker.species_name} targeting ${weakestTarget.species_name}`);
       return {
-        type: 'defend',
-        creature: randomAttacker
+        type: 'attack',
+        attacker: bestAttacker,
+        target: weakestTarget,
+        energyCost: ATTACK_ENERGY_COST
       };
+    } else {
+      console.log(`AI doesn't have enough energy to attack. Has ${enemyEnergy}, needs ${ATTACK_ENERGY_COST}`);
+      
+      // Not enough energy to attack, see if we can defend
+      if (enemyEnergy >= DEFEND_ENERGY_COST) {
+        const randomCreature = enemyField[Math.floor(Math.random() * enemyField.length)];
+        if (!randomCreature.isDefending) {
+          return {
+            type: 'defend',
+            creature: randomCreature,
+            energyCost: DEFEND_ENERGY_COST
+          };
+        }
+      }
     }
-    
-    return {
-      type: 'attack',
-      attacker: randomAttacker,
-      target: randomTarget
-    };
+  } else {
+    console.log(`No valid attack possible: AI has ${enemyField.length} creatures, player has ${playerField.length} creatures`);
   }
   
-  // If creatures on field but player has none, just defend
+  // If creatures on field but player has none, just end turn
   if (enemyField.length > 0 && playerField.length === 0) {
-    const randomCreature = enemyField[Math.floor(Math.random() * enemyField.length)];
-    
-    // Only defend if not already defending
-    if (!randomCreature.isDefending) {
-      return {
-        type: 'defend',
-        creature: randomCreature
-      };
-    }
+    return { type: 'endTurn' };
   }
   
   // If no valid action, end turn
   return { type: 'endTurn' };
 };
 
-// Custom AI functions for other difficulty levels with affordability check
+// Improved medium difficulty AI
 const determineMediumAIAction = (enemyHand, enemyField, playerField, enemyEnergy, maxFieldSize) => {
+  console.log("Running medium AI logic...");
+  
   // Deploy strongest affordable creature from hand if field isn't full
   if (enemyField.length < maxFieldSize && enemyHand.length > 0) {
     // Filter for affordable creatures first
@@ -426,6 +639,7 @@ const determineMediumAIAction = (enemyHand, enemyField, playerField, enemyEnergy
       
       if (bestCreature) {
         const energyCost = bestCreature.battleStats?.energyCost || 3;
+        console.log(`Medium AI deploying ${bestCreature.species_name} (cost: ${energyCost})`);
         return {
           type: 'deploy',
           creature: bestCreature,
@@ -435,52 +649,88 @@ const determineMediumAIAction = (enemyHand, enemyField, playerField, enemyEnergy
     }
   }
   
-  // Rest of medium AI logic (attack, defend, etc.)
+  // Check if we have enough energy to attack and there are valid targets
   if (enemyField.length > 0 && playerField.length > 0) {
-    // Find attacker with highest attack stat
-    const bestAttacker = enemyField.reduce((best, current) => {
-      if (!current.battleStats) return best;
-      if (!best) return current;
+    console.log(`Medium AI considering attack with ${enemyField.length} creatures against ${playerField.length} player creatures`);
+    
+    if (enemyEnergy >= ATTACK_ENERGY_COST) {
+      console.log(`Medium AI has ${enemyEnergy} energy, enough to attack (cost: ${ATTACK_ENERGY_COST})`);
       
-      const currentAttack = Math.max(
-        current.battleStats.physicalAttack || 0, 
-        current.battleStats.magicalAttack || 0
+      // Find attacker with highest attack stat
+      const bestAttacker = enemyField.reduce((best, current) => {
+        if (!current.battleStats) return best;
+        if (!best) return current;
+        
+        const currentAttack = Math.max(
+          current.battleStats.physicalAttack || 0, 
+          current.battleStats.magicalAttack || 0
+        );
+        const bestAttack = Math.max(
+          best.battleStats.physicalAttack || 0, 
+          best.battleStats.magicalAttack || 0
+        );
+        return currentAttack > bestAttack ? current : best;
+      }, null);
+      
+      // Find target with lowest health
+      const weakestTarget = playerField.reduce((weakest, current) => {
+        if (!weakest) return current;
+        return current.currentHealth < weakest.currentHealth ? current : weakest;
+      }, null);
+      
+      // Check if any creature needs defending (health below 40%)
+      const creatureNeedsDefending = enemyField.find(creature => 
+        !creature.isDefending && 
+        creature.currentHealth < (creature.battleStats.maxHealth * 0.4)
       );
-      const bestAttack = Math.max(
-        best.battleStats.physicalAttack || 0, 
-        best.battleStats.magicalAttack || 0
-      );
-      return currentAttack > bestAttack ? current : best;
-    }, null);
-    
-    // Find target with lowest health
-    const weakestTarget = playerField.reduce((weakest, current) => {
-      if (!weakest) return current;
-      return current.currentHealth < weakest.currentHealth ? current : weakest;
-    }, null);
-    
-    // 25% chance to defend if creature is below 30% health or if player has no creatures
-    if (bestAttacker && !bestAttacker.isDefending && 
-        (playerField.length === 0 || 
-         (bestAttacker.currentHealth < bestAttacker.battleStats.maxHealth * 0.3 && Math.random() < 0.25))) {
-      return {
-        type: 'defend',
-        creature: bestAttacker
-      };
+      
+      // 90% chance to attack in medium mode, unless a creature needs defending
+      const attackRoll = Math.random();
+      const willAttack = !creatureNeedsDefending || attackRoll < 0.9;
+      
+      console.log(`Medium AI attack probability check: ${attackRoll} < 0.9 = ${attackRoll < 0.9}, will attack: ${willAttack}`);
+      
+      if (willAttack) {
+        if (bestAttacker && weakestTarget) {
+          console.log(`Medium AI attacking with ${bestAttacker.species_name} targeting ${weakestTarget.species_name}`);
+          return {
+            type: 'attack',
+            attacker: bestAttacker,
+            target: weakestTarget,
+            energyCost: ATTACK_ENERGY_COST
+          };
+        }
+      }
+      
+      // If creature needs defending and we have energy, defend
+      if (creatureNeedsDefending && enemyEnergy >= DEFEND_ENERGY_COST) {
+        console.log(`Medium AI defending with ${creatureNeedsDefending.species_name} due to low health`);
+        return {
+          type: 'defend',
+          creature: creatureNeedsDefending,
+          energyCost: DEFEND_ENERGY_COST
+        };
+      } else {
+        // Default to attack if we have attackers and targets
+        if (bestAttacker && weakestTarget) {
+          console.log(`Medium AI defaulting to attack with ${bestAttacker.species_name}`);
+          return {
+            type: 'attack',
+            attacker: bestAttacker,
+            target: weakestTarget,
+            energyCost: ATTACK_ENERGY_COST
+          };
+        }
+      }
+    } else {
+      console.log(`Medium AI doesn't have enough energy to attack (has ${enemyEnergy}, needs ${ATTACK_ENERGY_COST})`);
     }
-    
-    // Attack with best attacker against weakest target
-    if (bestAttacker && weakestTarget) {
-      return {
-        type: 'attack',
-        attacker: bestAttacker,
-        target: weakestTarget
-      };
-    }
+  } else {
+    console.log(`Medium AI can't attack: AI has ${enemyField.length} creatures, player has ${playerField.length} creatures`);
   }
   
-  // Defend with low health creatures
-  if (enemyField.length > 0 && (playerField.length === 0 || Math.random() < 0.4)) {
+  // Defend with low health creatures if we have energy
+  if (enemyField.length > 0 && enemyEnergy >= DEFEND_ENERGY_COST) {
     // Find creature with lowest health percentage
     const lowestHealthCreature = enemyField.reduce((lowest, current) => {
       if (!current.battleStats || current.isDefending) return lowest;
@@ -492,14 +742,17 @@ const determineMediumAIAction = (enemyHand, enemyField, playerField, enemyEnergy
     }, null);
     
     if (lowestHealthCreature && lowestHealthCreature.currentHealth / lowestHealthCreature.battleStats.maxHealth < 0.5) {
+      console.log(`Medium AI defending with ${lowestHealthCreature.species_name} due to low health percentage`);
       return {
         type: 'defend',
-        creature: lowestHealthCreature
+        creature: lowestHealthCreature,
+        energyCost: DEFEND_ENERGY_COST
       };
     }
   }
   
   // If no valid action, end turn
+  console.log("Medium AI ending turn with no action");
   return { type: 'endTurn' };
 };
 
@@ -528,15 +781,14 @@ const customDetermineAIAction = (
     }
   })();
   
-  // SAFEGUARD: Add safety checks to prevent infinite loops
-  // If no valid action is possible, return 'endTurn'
+  // IMPROVED SAFEGUARD: Only check truly impossible situations
   if (
-    // Check if battlefield is full
-    (enemyField.length >= maxFieldSize) ||
-    // Check if no energy
-    enemyEnergy <= 0 ||
-    // Check if no cards in hand or no creatures on field
-    (enemyHand.length === 0 && enemyField.length === 0)
+    // No energy and no creatures on field = can't do anything
+    (enemyEnergy <= 0 && enemyField.length === 0) ||
+    // No cards in hand AND no creatures on field = can't do anything
+    (enemyHand.length === 0 && enemyField.length === 0) ||
+    // No enemy energy, no creatures in hand, and no player creatures to attack = can't do anything
+    (enemyEnergy <= 0 && enemyHand.length === 0 && playerField.length === 0)
   ) {
     console.log("AI SAFEGUARD triggered: Ending turn");
     return { type: 'endTurn' };
@@ -552,8 +804,8 @@ const customDetermineAIAction = (
     case 'hard':
     case 'expert':
     default:
-      // Fall back to easy AI for now
-      return determineEasyAIAction(enemyHand, enemyField, playerField, enemyEnergy, maxFieldSize);
+      // Fall back to medium AI for hard/expert until better AI is implemented
+      return determineMediumAIAction(enemyHand, enemyField, playerField, enemyEnergy, maxFieldSize);
   }
 };
 
@@ -638,14 +890,13 @@ const BattleGame = ({ onClose }) => {
   // ========== BATTLE MECHANICS ==========
   // Regenerate energy at the start of a turn (memoized)
   const regenerateEnergy = useCallback(() => {
-    // NEW ENERGY REGENERATION MODEL - per-turn increase instead of reset
-    const BASE_REGEN = 4; // Base regeneration per turn
+    // REDUCED ENERGY REGENERATION MODEL (multiplier reduced from 0.2 to 0.1)
     
     // Calculate player energy bonus from creatures' energy stat
     let playerBonus = 0;
     playerField.forEach(creature => {
       if (creature.stats && creature.stats.energy) {
-        playerBonus += Math.floor(creature.stats.energy * 0.2); // +0.2 per energy point
+        playerBonus += Math.floor(creature.stats.energy * ENERGY_STAT_MULTIPLIER); // Reduced from 0.2 to 0.1
       }
     });
     
@@ -653,15 +904,15 @@ const BattleGame = ({ onClose }) => {
     let enemyBonus = 0;
     enemyField.forEach(creature => {
       if (creature.stats && creature.stats.energy) {
-        enemyBonus += Math.floor(creature.stats.energy * 0.2);
+        enemyBonus += Math.floor(creature.stats.energy * ENERGY_STAT_MULTIPLIER); // Reduced from 0.2 to 0.1
       }
     });
     
     // Total regeneration amounts
-    const playerRegen = BASE_REGEN + playerBonus;
-    const enemyRegen = BASE_REGEN + enemyBonus;
+    const playerRegen = BASE_ENERGY_REGEN + playerBonus;
+    const enemyRegen = BASE_ENERGY_REGEN + enemyBonus;
     
-    console.log(`Regenerating energy - Player: +${playerRegen} (base ${BASE_REGEN} + ${playerBonus} bonus), Enemy: +${enemyRegen} (base ${BASE_REGEN} + ${enemyBonus} bonus)`);
+    console.log(`Regenerating energy - Player: +${playerRegen} (base ${BASE_ENERGY_REGEN} + ${playerBonus} bonus), Enemy: +${enemyRegen} (base ${BASE_ENERGY_REGEN} + ${enemyBonus} bonus)`);
     
     // Apply regeneration (cap at 15)
     dispatch({ type: ACTIONS.REGENERATE_ENERGY, playerRegen, enemyRegen });
@@ -682,7 +933,10 @@ const BattleGame = ({ onClose }) => {
     
     // Instead of manipulating the fields directly, just dispatch the action
     // The reducer will have the most up-to-date state and can handle the logic
-    dispatch({ type: ACTIONS.APPLY_ONGOING_EFFECTS });
+    dispatch({ 
+      type: ACTIONS.APPLY_ONGOING_EFFECTS,
+      addLog: addToBattleLog // Pass the log function to the reducer
+    });
     
     // Log any defeated creatures in the next render cycle
     // This ensures we're seeing the effects after they've been applied
@@ -692,7 +946,7 @@ const BattleGame = ({ onClose }) => {
         enemyField: enemyField.length
       });
     }, 0);
-  }, [dispatch, playerField, enemyField]);
+  }, [dispatch, addToBattleLog, playerField, enemyField]);
   
   // Check for win condition - memoized
   const checkWinCondition = useCallback(() => {
@@ -740,6 +994,13 @@ const BattleGame = ({ onClose }) => {
       return;
     }
     
+    // Check if attacker has enough energy
+    const isPlayerAttacker = playerField.some(c => c.id === attacker.id);
+    if (isPlayerAttacker && playerEnergy < ATTACK_ENERGY_COST) {
+      addToBattleLog(`Not enough energy to attack. Needs ${ATTACK_ENERGY_COST} energy.`);
+      return;
+    }
+    
     // Calculate attack type (physical or magical)
     const attackType = attacker.battleStats.physicalAttack > attacker.battleStats.magicalAttack 
       ? 'physical' 
@@ -749,11 +1010,16 @@ const BattleGame = ({ onClose }) => {
     const attackResult = processAttack(attacker, defender, attackType);
     
     // Update attacker and defender in state
-    dispatch({ type: ACTIONS.ATTACK, attackResult });
+    dispatch({ 
+      type: ACTIONS.ATTACK, 
+      attackResult,
+      energyCost: ATTACK_ENERGY_COST // Add energy cost for the attack
+    });
     
-    // Log attack result
-    addToBattleLog(attackResult.battleLog);
-  }, [addToBattleLog]);
+    // Log attack result and energy cost
+    const energyMessage = isPlayerAttacker ? ` (-${ATTACK_ENERGY_COST} energy)` : '';
+    addToBattleLog(attackResult.battleLog + energyMessage);
+  }, [playerField, playerEnergy, addToBattleLog]);
   
   // Use a tool on a creature - memoized
   const useTool = useCallback((tool, targetCreature) => {
@@ -790,8 +1056,13 @@ const BattleGame = ({ onClose }) => {
       return;
     }
     
-    // Process spell cast
+    // Process spell cast with fixed implementation
     const spellResult = applySpell(caster, target || caster, spell);
+    
+    if (!spellResult) {
+      addToBattleLog(`Failed to cast ${spell.name}.`);
+      return;
+    }
     
     // Update caster and target
     dispatch({ type: ACTIONS.USE_SPELL, spellResult, spell, energyCost });
@@ -813,18 +1084,25 @@ const BattleGame = ({ onClose }) => {
       return;
     }
     
+    // Check if player has enough energy for defending
+    const isPlayerCreature = playerField.some(c => c.id === creature.id);
+    if (isPlayerCreature && playerEnergy < DEFEND_ENERGY_COST) {
+      addToBattleLog(`Not enough energy to defend. Needs ${DEFEND_ENERGY_COST} energy.`);
+      return;
+    }
+    
     // Process defend action
     const updatedCreature = defendCreature(creature);
     
-    // Update creature in appropriate field
+    // Update creature in appropriate field with energy cost
     dispatch({ type: ACTIONS.DEFEND, updatedCreature });
     
-    // Log defend action
-    const isPlayerCreature = playerField.some(c => c.id === creature.id);
+    // Log defend action with energy cost
+    const energyCost = isPlayerCreature ? ` (-${DEFEND_ENERGY_COST} energy)` : '';
     addToBattleLog(
-      `${isPlayerCreature ? '' : 'Enemy '}${creature.species_name} took a defensive stance!`
+      `${isPlayerCreature ? '' : 'Enemy '}${creature.species_name} took a defensive stance!${energyCost}`
     );
-  }, [playerField, addToBattleLog]);
+  }, [playerField, playerEnergy, addToBattleLog]);
   
   // ========== BATTLE INITIALIZATION ==========
   // Initialize the battle based on the selected difficulty
@@ -857,6 +1135,17 @@ const BattleGame = ({ onClose }) => {
     // Calculate battle stats for enemy creatures and assign more reasonable energy costs
     const enemyWithStats = enemyCreatures.map((creature, index) => {
       const derivedStats = calculateDerivedStats(creature);
+      
+      // Apply enemy stats multiplier based on difficulty for stronger enemies
+      const statsMultiplier = diffSettings.enemyStatsMultiplier || 1.0;
+      
+      // Apply the multiplier to make enemies stronger
+      Object.keys(derivedStats).forEach(stat => {
+        // Skip energyCost and special stats
+        if (stat !== 'energyCost' && stat !== 'criticalChance' && stat !== 'dodgeChance') {
+          derivedStats[stat] = Math.round(derivedStats[stat] * statsMultiplier);
+        }
+      });
       
       // Ensure enemy creatures have reasonable energy costs
       // Assign costs that increase with form and rarity
@@ -927,7 +1216,7 @@ const BattleGame = ({ onClose }) => {
   const handleEnemyTurn = useCallback(() => {
     console.log("Enemy turn processing. Energy:", enemyEnergy, "Hand:", enemyHand.length, "Field:", enemyField.length);
     
-    // Use our custom AI function that properly filters affordable creatures
+    // Use our custom AI function that properly filters affordable creatures and considers energy costs
     const aiAction = customDetermineAIAction(
       difficulty, 
       enemyHand, 
@@ -986,9 +1275,16 @@ const BattleGame = ({ onClose }) => {
           break;
         }
         
+        // Check if AI has enough energy to attack
+        if (enemyEnergy < (aiAction.energyCost || ATTACK_ENERGY_COST)) {
+          console.log("AI Error: Not enough energy to attack");
+          addToBattleLog("Enemy doesn't have enough energy to attack");
+          break;
+        }
+        
         console.log("AI attacking with:", aiAction.attacker.species_name, "Target:", aiAction.target.species_name);
         
-        // Process attack
+        // Process attack with energy cost
         attackCreature(aiAction.attacker, aiAction.target);
         break;
         
@@ -1000,9 +1296,16 @@ const BattleGame = ({ onClose }) => {
           break;
         }
         
+        // Check if AI has enough energy to defend
+        if (enemyEnergy < (aiAction.energyCost || DEFEND_ENERGY_COST)) {
+          console.log("AI Error: Not enough energy to defend");
+          addToBattleLog("Enemy doesn't have enough energy to defend");
+          break;
+        }
+        
         console.log("AI defending with:", aiAction.creature.species_name);
         
-        // Process defend action
+        // Process defend action with energy cost
         defendCreatureAction(aiAction.creature);
         break;
         
@@ -1143,9 +1446,29 @@ const BattleGame = ({ onClose }) => {
           break;
         }
         
+        // Check energy cost for attack
+        const attackCost = aiAction.energyCost || ATTACK_ENERGY_COST;
+        
+        if (currentEnemyEnergy < attackCost) {
+          console.log("AI Error: Not enough energy to attack");
+          addToBattleLog("Enemy doesn't have enough energy to attack");
+          finishEnemyTurn();
+          break;
+        }
+        
         console.log("AI attacking with:", aiAction.attacker.species_name, "Target:", aiAction.target.species_name);
         
-        attackCreature(aiAction.attacker, aiAction.target);
+        // Process attack with energy cost
+        const attackResult = processAttack(aiAction.attacker, aiAction.target);
+        
+        dispatch({
+          type: ACTIONS.ATTACK,
+          attackResult,
+          energyCost: attackCost
+        });
+        
+        // Log attack
+        addToBattleLog(`${attackResult.battleLog} (-${attackCost} energy)`);
         
         // Wait for attack to finish before continuing
         setTimeout(finishEnemyTurn, 100);
@@ -1159,9 +1482,28 @@ const BattleGame = ({ onClose }) => {
           break;
         }
         
+        // Check energy cost for defend
+        const defendCost = aiAction.energyCost || DEFEND_ENERGY_COST;
+        
+        if (currentEnemyEnergy < defendCost) {
+          console.log("AI Error: Not enough energy to defend");
+          addToBattleLog("Enemy doesn't have enough energy to defend");
+          finishEnemyTurn();
+          break;
+        }
+        
         console.log("AI defending with:", aiAction.creature.species_name);
         
-        defendCreatureAction(aiAction.creature);
+        // Process defend with energy cost
+        const updatedDefender = defendCreature(aiAction.creature);
+        
+        dispatch({
+          type: ACTIONS.DEFEND,
+          updatedCreature: updatedDefender
+        });
+        
+        // Log defend
+        addToBattleLog(`Enemy ${aiAction.creature.species_name} took a defensive stance! (-${defendCost} energy)`);
         
         // Wait for defend to finish before continuing
         setTimeout(finishEnemyTurn, 100);
@@ -1189,8 +1531,6 @@ const BattleGame = ({ onClose }) => {
     enemyDeck,
     turn,
     addToBattleLog,
-    attackCreature,
-    defendCreatureAction,
     checkWinCondition,
     checkLossCondition,
     regenerateEnergy
@@ -1225,6 +1565,12 @@ const BattleGame = ({ onClose }) => {
         break;
         
       case 'attack':
+        // Check if player has enough energy to attack
+        if (playerEnergy < ATTACK_ENERGY_COST) {
+          addToBattleLog(`Not enough energy to attack. Needs ${ATTACK_ENERGY_COST} energy.`);
+          return;
+        }
+        
         setActionInProgress(true);
         attackCreature(sourceCreature, targetCreature);
         clearSelections();
@@ -1252,6 +1598,12 @@ const BattleGame = ({ onClose }) => {
         break;
         
       case 'defend':
+        // Check if player has enough energy to defend
+        if (playerEnergy < DEFEND_ENERGY_COST) {
+          addToBattleLog(`Not enough energy to defend. Needs ${DEFEND_ENERGY_COST} energy.`);
+          return;
+        }
+        
         setActionInProgress(true);
         defendCreatureAction(sourceCreature);
         clearSelections();
@@ -1308,6 +1660,7 @@ const BattleGame = ({ onClose }) => {
     activePlayer,
     actionInProgress,
     turn,
+    playerEnergy,
     deployCreature,
     attackCreature,
     useTool,
@@ -1364,8 +1717,8 @@ const BattleGame = ({ onClose }) => {
     
     // If creature is on the field, it can attack, defend, or be targeted by tools/spells
     if (playerField.some(c => c.id === selectedCreature.id)) {
-      // Can attack if an enemy target is selected
-      if (targetCreature && enemyField.some(c => c.id === targetCreature.id)) {
+      // Can attack if an enemy target is selected and we have enough energy
+      if (targetCreature && enemyField.some(c => c.id === targetCreature.id) && playerEnergy >= ATTACK_ENERGY_COST) {
         actions.push('attack');
       }
       
@@ -1374,20 +1727,22 @@ const BattleGame = ({ onClose }) => {
         actions.push('useTool');
       }
       
-      // Can use spells if available
-      if (playerSpells.length > 0) {
+      // Can use spells if available and enough energy
+      if (playerSpells.length > 0 && playerEnergy >= 4) {
         actions.push('useSpell');
       }
       
-      // Can always defend
-      actions.push('defend');
+      // Can defend if have enough energy
+      if (playerEnergy >= DEFEND_ENERGY_COST) {
+        actions.push('defend');
+      }
     }
     
     // Can always end turn
     actions.push('endTurn');
     
     return actions;
-  }, [playerHand, playerField, enemyField, playerTools, playerSpells]);
+  }, [playerHand, playerField, enemyField, playerTools, playerSpells, playerEnergy]);
   
   // ========== EFFECTS ==========
   // Effect to handle game state changes, victory/defeat conditions
