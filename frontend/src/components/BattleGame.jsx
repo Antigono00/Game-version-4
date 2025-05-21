@@ -225,12 +225,92 @@ const battleReducer = (state, action) => {
       };
     
     case ACTIONS.APPLY_ONGOING_EFFECTS: {
-      // Only update fields if arrays are provided
+      // Process player field effects
+      const processedPlayerField = state.playerField.map(creature => {
+        let updatedCreature = { ...creature };
+        
+        // Process active effects
+        const activeEffects = updatedCreature.activeEffects || [];
+        if (activeEffects.length > 0) {
+          const remainingEffects = [];
+          
+          activeEffects.forEach(effect => {
+            // Apply effect
+            if (effect.healthEffect) {
+              // Apply health change
+              updatedCreature.currentHealth = Math.min(
+                updatedCreature.battleStats.maxHealth,
+                Math.max(0, updatedCreature.currentHealth + effect.healthEffect)
+              );
+            }
+            
+            // Decrement duration
+            const updatedEffect = { ...effect, duration: effect.duration - 1 };
+            
+            // Keep effect if duration is still > 0
+            if (updatedEffect.duration > 0) {
+              remainingEffects.push(updatedEffect);
+            }
+          });
+          
+          // Update creature active effects
+          updatedCreature.activeEffects = remainingEffects;
+        }
+        
+        // Reset defending status (lasts only one turn)
+        if (updatedCreature.isDefending) {
+          updatedCreature.isDefending = false;
+        }
+        
+        return updatedCreature;
+      });
+      
+      // Process enemy field effects - important to use the current state from the reducer
+      const processedEnemyField = state.enemyField.map(creature => {
+        let updatedCreature = { ...creature };
+        
+        // Process active effects
+        const activeEffects = updatedCreature.activeEffects || [];
+        if (activeEffects.length > 0) {
+          const remainingEffects = [];
+          
+          activeEffects.forEach(effect => {
+            // Apply effect
+            if (effect.healthEffect) {
+              // Apply health change
+              updatedCreature.currentHealth = Math.min(
+                updatedCreature.battleStats.maxHealth,
+                Math.max(0, updatedCreature.currentHealth + effect.healthEffect)
+              );
+            }
+            
+            // Decrement duration
+            const updatedEffect = { ...effect, duration: effect.duration - 1 };
+            
+            // Keep effect if duration is still > 0
+            if (updatedEffect.duration > 0) {
+              remainingEffects.push(updatedEffect);
+            }
+          });
+          
+          // Update creature active effects
+          updatedCreature.activeEffects = remainingEffects;
+        }
+        
+        // Reset defending status
+        if (updatedCreature.isDefending) {
+          updatedCreature.isDefending = false;
+        }
+        
+        return updatedCreature;
+      });
+      
+      // Filter out defeated creatures (those with health <= 0)
       const updatedPlayerField = action.updatedPlayerField || 
-        state.playerField.filter(c => c.currentHealth > 0);
+        processedPlayerField.filter(c => c.currentHealth > 0);
       
       const updatedEnemyField = action.updatedEnemyField || 
-        state.enemyField.filter(c => c.currentHealth > 0);
+        processedEnemyField.filter(c => c.currentHealth > 0);
       
       console.log("APPLY_ONGOING_EFFECTS - Enemy field before:", state.enemyField.length);
       console.log("APPLY_ONGOING_EFFECTS - Enemy field after:", updatedEnemyField.length);
@@ -596,163 +676,23 @@ const BattleGame = ({ onClose }) => {
   
   // Apply ongoing effects (buffs/debuffs/DoT) - memoized with the latest state
   const applyOngoingEffects = useCallback(() => {
-    // Get the latest field state for processing
-    console.log("Applying ongoing effects - Before: ", {
-      playerField: playerField.length,
-      enemyField: enemyField.length
-    });
+    // We'll now use an approach that doesn't rely on potentially stale state
     
-    // Process player field effects
-    const updatedPlayerField = playerField.map(creature => {
-      let updatedCreature = { ...creature };
-      let effectLog = [];
-      
-      // Process active effects
-      const activeEffects = updatedCreature.activeEffects || [];
-      if (activeEffects.length > 0) {
-        const expiredEffects = [];
-        const remainingEffects = [];
-        
-        activeEffects.forEach(effect => {
-          // Apply effect
-          if (effect.healthEffect) {
-            // Apply health change
-            updatedCreature.currentHealth = Math.min(
-              updatedCreature.battleStats.maxHealth,
-              Math.max(0, updatedCreature.currentHealth + effect.healthEffect)
-            );
-            
-            // Log health change
-            if (effect.healthEffect > 0) {
-              effectLog.push(`${updatedCreature.species_name} healed for ${effect.healthEffect} health from ${effect.name}.`);
-            } else if (effect.healthEffect < 0) {
-              effectLog.push(`${updatedCreature.species_name} took ${Math.abs(effect.healthEffect)} damage from ${effect.name}.`);
-            }
-          }
-          
-          // Decrement duration
-          const updatedEffect = { ...effect, duration: effect.duration - 1 };
-          
-          // Check if effect has expired
-          if (updatedEffect.duration <= 0) {
-            expiredEffects.push(updatedEffect);
-          } else {
-            remainingEffects.push(updatedEffect);
-          }
-        });
-        
-        // Log expired effects
-        expiredEffects.forEach(effect => {
-          effectLog.push(`${effect.name} effect on ${updatedCreature.species_name} has worn off.`);
-        });
-        
-        // Update creature active effects
-        updatedCreature.activeEffects = remainingEffects;
-      }
-      
-      // Reset defending status (lasts only one turn)
-      if (updatedCreature.isDefending) {
-        updatedCreature.isDefending = false;
-        effectLog.push(`${updatedCreature.species_name} is no longer defending.`);
-      }
-      
-      // Log all effects
-      effectLog.forEach(message => addToBattleLog(message));
-      
-      return updatedCreature;
-    });
+    console.log("Initiating ongoing effects application...");
     
-    // Process enemy field effects - using the current enemyField
-    const updatedEnemyField = enemyField.map(creature => {
-      let updatedCreature = { ...creature };
-      let effectLog = [];
-      
-      // Similar processing for enemy creatures
-      const activeEffects = updatedCreature.activeEffects || [];
-      if (activeEffects.length > 0) {
-        const expiredEffects = [];
-        const remainingEffects = [];
-        
-        activeEffects.forEach(effect => {
-          // Apply effect
-          if (effect.healthEffect) {
-            updatedCreature.currentHealth = Math.min(
-              updatedCreature.battleStats.maxHealth,
-              Math.max(0, updatedCreature.currentHealth + effect.healthEffect)
-            );
-            
-            // Log health change
-            if (effect.healthEffect > 0) {
-              effectLog.push(`Enemy ${updatedCreature.species_name} healed for ${effect.healthEffect} health from ${effect.name}.`);
-            } else if (effect.healthEffect < 0) {
-              effectLog.push(`Enemy ${updatedCreature.species_name} took ${Math.abs(effect.healthEffect)} damage from ${effect.name}.`);
-            }
-          }
-          
-          // Decrement duration
-          const updatedEffect = { ...effect, duration: effect.duration - 1 };
-          
-          // Check if effect has expired
-          if (updatedEffect.duration <= 0) {
-            expiredEffects.push(updatedEffect);
-          } else {
-            remainingEffects.push(updatedEffect);
-          }
-        });
-        
-        // Log expired effects
-        expiredEffects.forEach(effect => {
-          effectLog.push(`${effect.name} effect on enemy ${updatedCreature.species_name} has worn off.`);
-        });
-        
-        // Update creature active effects
-        updatedCreature.activeEffects = remainingEffects;
-      }
-      
-      // Reset defending status
-      if (updatedCreature.isDefending) {
-        updatedCreature.isDefending = false;
-        effectLog.push(`Enemy ${updatedCreature.species_name} is no longer defending.`);
-      }
-      
-      // Log all effects
-      effectLog.forEach(message => addToBattleLog(message));
-      
-      return updatedCreature;
-    });
+    // Instead of manipulating the fields directly, just dispatch the action
+    // The reducer will have the most up-to-date state and can handle the logic
+    dispatch({ type: ACTIONS.APPLY_ONGOING_EFFECTS });
     
-    console.log("Field size after effects processing, before health filtering:", {
-      playerField: updatedPlayerField.length,
-      enemyField: updatedEnemyField.length
-    });
-    
-    // Remove only creatures with 0 or less health
-    const alivePlayerCreatures = updatedPlayerField.filter(creature => creature.currentHealth > 0);
-    const aliveEnemyCreatures = updatedEnemyField.filter(creature => creature.currentHealth > 0);
-    
-    console.log("Field size after health filtering:", {
-      playerField: alivePlayerCreatures.length,
-      enemyField: aliveEnemyCreatures.length
-    });
-    
-    // Log defeated creatures
-    if (alivePlayerCreatures.length < updatedPlayerField.length) {
-      const defeatedCount = updatedPlayerField.length - alivePlayerCreatures.length;
-      addToBattleLog(`${defeatedCount} of your creatures were defeated!`);
-    }
-    
-    if (aliveEnemyCreatures.length < updatedEnemyField.length) {
-      const defeatedCount = updatedEnemyField.length - aliveEnemyCreatures.length;
-      addToBattleLog(`${defeatedCount} enemy creatures were defeated!`);
-    }
-    
-    // Apply the updates to the state
-    dispatch({ 
-      type: ACTIONS.APPLY_ONGOING_EFFECTS, 
-      updatedPlayerField: alivePlayerCreatures, 
-      updatedEnemyField: aliveEnemyCreatures
-    });
-  }, [playerField, enemyField, addToBattleLog]);
+    // Log any defeated creatures in the next render cycle
+    // This ensures we're seeing the effects after they've been applied
+    setTimeout(() => {
+      console.log("Ongoing effects applied - Current field sizes:", {
+        playerField: playerField.length,
+        enemyField: enemyField.length
+      });
+    }, 0);
+  }, [dispatch, playerField, enemyField]);
   
   // Check for win condition - memoized
   const checkWinCondition = useCallback(() => {
@@ -1091,14 +1031,15 @@ const BattleGame = ({ onClose }) => {
   const processEnemyTurn = useCallback(() => {
     console.log("Starting enemy turn...");
     
-    // Execute enemy AI action
-    handleEnemyTurn();
+    // Need to capture current state values to ensure AI makes decisions based on current data
+    const currentEnemyHand = [...enemyHand];
+    const currentEnemyField = [...enemyField];
+    const currentPlayerField = [...playerField];
+    const currentEnemyEnergy = enemyEnergy;
     
-    // CRITICAL FIX: Use setTimeout to ensure the creature deployment has been processed
-    // before applying effects and continuing with the turn
-    setTimeout(() => {
+    // Function to handle the rest of the turn AFTER the AI action is processed
+    const finishEnemyTurn = () => {
       console.log("Now processing effects and finishing turn");
-      console.log("Enemy field before effects:", enemyField);
       
       // Check win/loss conditions
       if (checkWinCondition()) {
@@ -1115,8 +1056,9 @@ const BattleGame = ({ onClose }) => {
         return;
       }
       
-      // Apply ongoing effects now that we have the updated state
-      applyOngoingEffects();
+      // Critical fix: Don't use the pre-captured enemyField here
+      // Instead, let the reducer use its current state by not providing specific field updates
+      dispatch({ type: ACTIONS.APPLY_ONGOING_EFFECTS });
       
       // Increment turn counter
       dispatch({ type: ACTIONS.INCREMENT_TURN });
@@ -1136,32 +1078,122 @@ const BattleGame = ({ onClose }) => {
         addToBattleLog(`Enemy drew a card.`);
       }
       
-      // Regenerate energy (now using our improved model)
+      // Regenerate energy
       regenerateEnergy();
       
       addToBattleLog(`Turn ${turn + 1} - Your turn.`);
-      
-      console.log("End of enemy turn - Enemy field:", enemyField);
       
       // Unlock the UI
       setActionInProgress(false);
       
       console.log("Enemy turn complete");
-    }, 0); // Zero ms timeout ensures this runs after React updates state
+    };
+    
+    // Use our custom AI function with the captured current state
+    const aiAction = customDetermineAIAction(
+      difficulty, 
+      currentEnemyHand, 
+      currentEnemyField, 
+      currentPlayerField,
+      [], // Enemy tools not implemented yet
+      [], // Enemy spells not implemented yet
+      currentEnemyEnergy
+    );
+    
+    console.log("AI decided on action:", aiAction.type);
+    
+    // Process AI action
+    switch(aiAction.type) {
+      case 'deploy': 
+        if (!aiAction.creature) {
+          console.log("AI Error: No creature to deploy");
+          addToBattleLog("Enemy AI error: No creature to deploy");
+          finishEnemyTurn();
+          break;
+        }
+        
+        const energyCost = aiAction.energyCost || aiAction.creature.battleStats?.energyCost || 3;
+        
+        if (currentEnemyEnergy < energyCost) {
+          console.log("AI Error: Not enough energy to deploy");
+          addToBattleLog("Enemy doesn't have enough energy to deploy");
+          finishEnemyTurn();
+          break;
+        }
+        
+        console.log("AI deploying creature:", aiAction.creature.species_name, "Cost:", energyCost);
+        
+        dispatch({
+          type: ACTIONS.ENEMY_DEPLOY_CREATURE,
+          creature: aiAction.creature,
+          energyCost
+        });
+        
+        addToBattleLog(`Enemy deployed ${aiAction.creature.species_name} to the battlefield! (-${energyCost} energy)`);
+        
+        // Critical fix: Wait for deployment to finish before continuing with turn processing
+        setTimeout(finishEnemyTurn, 100);
+        break;
+        
+      case 'attack':
+        if (!aiAction.attacker || !aiAction.target) {
+          console.log("AI Error: Missing attacker or target");
+          addToBattleLog("Enemy AI error: Missing attacker or target");
+          finishEnemyTurn();
+          break;
+        }
+        
+        console.log("AI attacking with:", aiAction.attacker.species_name, "Target:", aiAction.target.species_name);
+        
+        attackCreature(aiAction.attacker, aiAction.target);
+        
+        // Wait for attack to finish before continuing
+        setTimeout(finishEnemyTurn, 100);
+        break;
+        
+      case 'defend':
+        if (!aiAction.creature) {
+          console.log("AI Error: No creature to defend");
+          addToBattleLog("Enemy AI error: No creature to defend");
+          finishEnemyTurn();
+          break;
+        }
+        
+        console.log("AI defending with:", aiAction.creature.species_name);
+        
+        defendCreatureAction(aiAction.creature);
+        
+        // Wait for defend to finish before continuing
+        setTimeout(finishEnemyTurn, 100);
+        break;
+        
+      case 'endTurn':
+        console.log("AI ending turn with no action");
+        addToBattleLog("Enemy ended their turn.");
+        finishEnemyTurn();
+        break;
+        
+      default:
+        console.log("Unknown AI action type:", aiAction.type);
+        addToBattleLog("Enemy AI error: Invalid action");
+        finishEnemyTurn();
+    }
   }, [
-    handleEnemyTurn,
-    enemyField,
-    checkWinCondition,
-    checkLossCondition,
-    applyOngoingEffects,
-    regenerateEnergy,
+    difficulty, 
+    enemyHand, 
+    enemyField, 
+    playerField, 
+    enemyEnergy,
     playerHand,
     playerDeck,
-    enemyHand,
     enemyDeck,
-    difficulty,
     turn,
-    addToBattleLog
+    addToBattleLog,
+    attackCreature,
+    defendCreatureAction,
+    checkWinCondition,
+    checkLossCondition,
+    regenerateEnergy
   ]);
   
   // ========== EVENT HANDLERS ==========
@@ -1250,7 +1282,7 @@ const BattleGame = ({ onClose }) => {
         }
         
         // Apply ongoing effects for player's turn BEFORE switching to enemy
-        applyOngoingEffects();
+        dispatch({ type: ACTIONS.APPLY_ONGOING_EFFECTS });
         
         // Set active player to enemy
         dispatch({ type: ACTIONS.SET_ACTIVE_PLAYER, player: 'enemy' });
@@ -1283,7 +1315,6 @@ const BattleGame = ({ onClose }) => {
     defendCreatureAction,
     checkWinCondition,
     checkLossCondition,
-    applyOngoingEffects,
     addToBattleLog,
     processEnemyTurn
   ]);
