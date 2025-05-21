@@ -1,5 +1,5 @@
 // src/components/BattleGame.jsx
-import React, { useState, useEffect, useContext, useCallback } from 'react';
+import React, { useState, useEffect, useContext, useCallback, useReducer } from 'react';
 import { GameContext } from '../context/GameContext';
 import { useRadixConnect } from '../context/RadixConnectContext';
 import Battlefield from './battle/Battlefield';
@@ -14,43 +14,520 @@ import { determineAIAction } from '../utils/battleAI';
 import { processAttack, applyTool, applySpell, defendCreature } from '../utils/battleCore';
 import { generateEnemyCreatures, getDifficultySettings } from '../utils/difficultySettings';
 
+// Action types for our reducer
+const ACTIONS = {
+  START_BATTLE: 'START_BATTLE',
+  DEPLOY_CREATURE: 'DEPLOY_CREATURE',
+  ENEMY_DEPLOY_CREATURE: 'ENEMY_DEPLOY_CREATURE',
+  UPDATE_CREATURE: 'UPDATE_CREATURE',
+  ATTACK: 'ATTACK',
+  USE_TOOL: 'USE_TOOL',
+  USE_SPELL: 'USE_SPELL',
+  DEFEND: 'DEFEND',
+  DRAW_CARD: 'DRAW_CARD',
+  REGENERATE_ENERGY: 'REGENERATE_ENERGY',
+  SET_ACTIVE_PLAYER: 'SET_ACTIVE_PLAYER',
+  INCREMENT_TURN: 'INCREMENT_TURN',
+  SET_GAME_STATE: 'SET_GAME_STATE',
+  APPLY_ONGOING_EFFECTS: 'APPLY_ONGOING_EFFECTS',
+  ADD_LOG: 'ADD_LOG'
+};
+
+// Battle state reducer to consolidate multiple state updates
+const battleReducer = (state, action) => {
+  switch (action.type) {
+    case ACTIONS.START_BATTLE:
+      return {
+        ...state,
+        gameState: 'battle',
+        playerDeck: action.playerDeck,
+        playerHand: action.playerHand,
+        playerField: [],
+        enemyDeck: action.enemyDeck,
+        enemyHand: action.enemyHand,
+        enemyField: [],
+        playerEnergy: 10, // Initial energy at start
+        enemyEnergy: 10,  // Initial energy at start
+        turn: 1,
+        activePlayer: 'player',
+        battleLog: [{
+          id: Date.now(),
+          turn: 1,
+          message: `Battle started! Difficulty: ${action.difficulty.charAt(0).toUpperCase() + action.difficulty.slice(1)}`
+        }],
+        playerTools: action.playerTools,
+        playerSpells: action.playerSpells
+      };
+    
+    case ACTIONS.DEPLOY_CREATURE:
+      return {
+        ...state,
+        playerHand: state.playerHand.filter(c => c.id !== action.creature.id),
+        playerField: [...state.playerField, action.creature],
+        playerEnergy: state.playerEnergy - (action.energyCost || action.creature.battleStats.energyCost || 3),
+      };
+    
+    case ACTIONS.ENEMY_DEPLOY_CREATURE:
+      // Make sure we're actually deploying the creature
+      console.log(`REDUCER: Deploying enemy creature ${action.creature.species_name} to field`);
+      
+      const newEnemyField = [...state.enemyField, action.creature];
+      console.log("Updated enemy field:", newEnemyField);
+      
+      return {
+        ...state,
+        enemyHand: state.enemyHand.filter(c => c.id !== action.creature.id),
+        enemyField: newEnemyField,
+        enemyEnergy: state.enemyEnergy - (action.energyCost || action.creature.battleStats.energyCost || 3),
+      };
+    
+    case ACTIONS.UPDATE_CREATURE:
+      if (action.isPlayer) {
+        return {
+          ...state,
+          playerField: state.playerField.map(c => 
+            c.id === action.creature.id ? action.creature : c
+          )
+        };
+      } else {
+        return {
+          ...state,
+          enemyField: state.enemyField.map(c => 
+            c.id === action.creature.id ? action.creature : c
+          )
+        };
+      }
+    
+    case ACTIONS.ATTACK:
+      const { attackResult } = action;
+      const isPlayerAttacker = state.playerField.some(c => c.id === attackResult.updatedAttacker.id);
+      const isPlayerDefender = state.playerField.some(c => c.id === attackResult.updatedDefender.id);
+      
+      return {
+        ...state,
+        playerField: state.playerField.map(c => {
+          if (isPlayerAttacker && c.id === attackResult.updatedAttacker.id) {
+            return attackResult.updatedAttacker;
+          }
+          if (isPlayerDefender && c.id === attackResult.updatedDefender.id) {
+            return attackResult.updatedDefender;
+          }
+          return c;
+        }),
+        enemyField: state.enemyField.map(c => {
+          if (!isPlayerAttacker && c.id === attackResult.updatedAttacker.id) {
+            return attackResult.updatedAttacker;
+          }
+          if (!isPlayerDefender && c.id === attackResult.updatedDefender.id) {
+            return attackResult.updatedDefender;
+          }
+          return c;
+        }),
+      };
+    
+    case ACTIONS.USE_TOOL:
+      const isPlayerToolTarget = state.playerField.some(c => c.id === action.result.updatedCreature.id);
+      return {
+        ...state,
+        playerField: isPlayerToolTarget
+          ? state.playerField.map(c => c.id === action.result.updatedCreature.id ? action.result.updatedCreature : c)
+          : state.playerField,
+        enemyField: !isPlayerToolTarget
+          ? state.enemyField.map(c => c.id === action.result.updatedCreature.id ? action.result.updatedCreature : c)
+          : state.enemyField,
+        playerTools: state.playerTools.filter(t => t.id !== action.tool.id)
+      };
+    
+    case ACTIONS.USE_SPELL:
+      const { spellResult, spell } = action;
+      const isPlayerCaster = state.playerField.some(c => c.id === spellResult.updatedCaster.id);
+      const isPlayerTarget = state.playerField.some(c => c.id === spellResult.updatedTarget.id);
+      
+      return {
+        ...state,
+        playerField: state.playerField.map(c => {
+          if (isPlayerCaster && c.id === spellResult.updatedCaster.id) {
+            return spellResult.updatedCaster;
+          }
+          if (isPlayerTarget && c.id === spellResult.updatedTarget.id) {
+            return spellResult.updatedTarget;
+          }
+          return c;
+        }),
+        enemyField: state.enemyField.map(c => {
+          if (!isPlayerCaster && c.id === spellResult.updatedCaster.id) {
+            return spellResult.updatedCaster;
+          }
+          if (!isPlayerTarget && c.id === spellResult.updatedTarget.id) {
+            return spellResult.updatedTarget;
+          }
+          return c;
+        }),
+        playerEnergy: state.playerEnergy - (action.energyCost || 4),
+        playerSpells: state.playerSpells.filter(s => s.id !== spell.id)
+      };
+    
+    case ACTIONS.DEFEND:
+      const isPlayerDefending = state.playerField.some(c => c.id === action.updatedCreature.id);
+      return {
+        ...state,
+        playerField: isPlayerDefending
+          ? state.playerField.map(c => c.id === action.updatedCreature.id ? action.updatedCreature : c)
+          : state.playerField,
+        enemyField: !isPlayerDefending
+          ? state.enemyField.map(c => c.id === action.updatedCreature.id ? action.updatedCreature : c)
+          : state.enemyField
+      };
+    
+    case ACTIONS.DRAW_CARD:
+      if (action.player === 'player') {
+        if (state.playerDeck.length === 0) return state;
+        const drawnCard = state.playerDeck[0];
+        return {
+          ...state,
+          playerHand: [...state.playerHand, drawnCard],
+          playerDeck: state.playerDeck.slice(1)
+        };
+      } else {
+        if (state.enemyDeck.length === 0) return state;
+        const drawnCard = state.enemyDeck[0];
+        return {
+          ...state,
+          enemyHand: [...state.enemyHand, drawnCard],
+          enemyDeck: state.enemyDeck.slice(1)
+        };
+      }
+    
+    case ACTIONS.REGENERATE_ENERGY:
+      // New energy regeneration logic - adds to current energy instead of resetting
+      return {
+        ...state,
+        playerEnergy: Math.min(15, state.playerEnergy + action.playerRegen),
+        enemyEnergy: Math.min(15, state.enemyEnergy + action.enemyRegen)
+      };
+    
+    case ACTIONS.SET_ACTIVE_PLAYER:
+      return {
+        ...state,
+        activePlayer: action.player
+      };
+    
+    case ACTIONS.INCREMENT_TURN:
+      return {
+        ...state,
+        turn: state.turn + 1
+      };
+    
+    case ACTIONS.SET_GAME_STATE:
+      return {
+        ...state,
+        gameState: action.gameState
+      };
+    
+    case ACTIONS.APPLY_ONGOING_EFFECTS: {
+      // Only update fields if arrays are provided
+      const updatedPlayerField = action.updatedPlayerField || 
+        state.playerField.filter(c => c.currentHealth > 0);
+      
+      const updatedEnemyField = action.updatedEnemyField || 
+        state.enemyField.filter(c => c.currentHealth > 0);
+      
+      console.log("APPLY_ONGOING_EFFECTS - Enemy field before:", state.enemyField.length);
+      console.log("APPLY_ONGOING_EFFECTS - Enemy field after:", updatedEnemyField.length);
+      
+      return {
+        ...state,
+        playerField: updatedPlayerField,
+        enemyField: updatedEnemyField
+      };
+    }
+    
+    case ACTIONS.ADD_LOG:
+      return {
+        ...state,
+        battleLog: [...state.battleLog, {
+          id: Date.now() + Math.random(),
+          turn: state.turn,
+          message: action.message
+        }]
+      };
+    
+    default:
+      return state;
+  }
+};
+
+// ============= CUSTOM AI FUNCTIONS ============= //
+// This modified version of determineEasyAIAction ensures we only select affordable creatures
+const determineEasyAIAction = (enemyHand, enemyField, playerField, enemyEnergy, maxFieldSize) => {
+  // If no creatures on field and have cards in hand, deploy one
+  if (enemyField.length < maxFieldSize && enemyHand.length > 0) {
+    // IMPORTANT FIX: Filter for affordable creatures first
+    const affordableCreatures = enemyHand.filter(creature => {
+      const energyCost = creature.battleStats?.energyCost || 3;
+      return energyCost <= enemyEnergy;
+    });
+    
+    // If we have any affordable creatures, deploy one
+    if (affordableCreatures.length > 0) {
+      // Pick a random affordable creature
+      const randomCreature = affordableCreatures[Math.floor(Math.random() * affordableCreatures.length)];
+      const energyCost = randomCreature.battleStats?.energyCost || 3;
+      
+      console.log(`AI can afford to deploy ${randomCreature.species_name} (cost: ${energyCost}, energy: ${enemyEnergy})`);
+      
+      return {
+        type: 'deploy',
+        creature: randomCreature,
+        energyCost: energyCost
+      };
+    } else {
+      console.log(`AI has creatures in hand but cannot afford any of them (energy: ${enemyEnergy})`);
+    }
+  }
+  
+  // If creatures on field and player has creatures, attack randomly
+  if (enemyField.length > 0 && playerField.length > 0) {
+    const randomAttacker = enemyField[Math.floor(Math.random() * enemyField.length)];
+    const randomTarget = playerField[Math.floor(Math.random() * playerField.length)];
+    
+    // 30% chance to defend instead of attack
+    if (Math.random() < 0.3 && !randomAttacker.isDefending) {
+      return {
+        type: 'defend',
+        creature: randomAttacker
+      };
+    }
+    
+    return {
+      type: 'attack',
+      attacker: randomAttacker,
+      target: randomTarget
+    };
+  }
+  
+  // If creatures on field but player has none, just defend
+  if (enemyField.length > 0 && playerField.length === 0) {
+    const randomCreature = enemyField[Math.floor(Math.random() * enemyField.length)];
+    
+    // Only defend if not already defending
+    if (!randomCreature.isDefending) {
+      return {
+        type: 'defend',
+        creature: randomCreature
+      };
+    }
+  }
+  
+  // If no valid action, end turn
+  return { type: 'endTurn' };
+};
+
+// Custom AI functions for other difficulty levels with affordability check
+const determineMediumAIAction = (enemyHand, enemyField, playerField, enemyEnergy, maxFieldSize) => {
+  // Deploy strongest affordable creature from hand if field isn't full
+  if (enemyField.length < maxFieldSize && enemyHand.length > 0) {
+    // Filter for affordable creatures first
+    const affordableCreatures = enemyHand.filter(creature => {
+      const energyCost = creature.battleStats?.energyCost || 3;
+      return energyCost <= enemyEnergy;
+    });
+    
+    if (affordableCreatures.length > 0) {
+      // Find creature with highest combined stats
+      const bestCreature = affordableCreatures.reduce((best, current) => {
+        if (!current.stats) return best;
+        if (!best) return current;
+        
+        const currentTotal = Object.values(current.stats).reduce((sum, val) => sum + val, 0);
+        const bestTotal = best.stats ? Object.values(best.stats).reduce((sum, val) => sum + val, 0) : 0;
+        return currentTotal > bestTotal ? current : best;
+      }, null);
+      
+      if (bestCreature) {
+        const energyCost = bestCreature.battleStats?.energyCost || 3;
+        return {
+          type: 'deploy',
+          creature: bestCreature,
+          energyCost: energyCost
+        };
+      }
+    }
+  }
+  
+  // Rest of medium AI logic (attack, defend, etc.)
+  if (enemyField.length > 0 && playerField.length > 0) {
+    // Find attacker with highest attack stat
+    const bestAttacker = enemyField.reduce((best, current) => {
+      if (!current.battleStats) return best;
+      if (!best) return current;
+      
+      const currentAttack = Math.max(
+        current.battleStats.physicalAttack || 0, 
+        current.battleStats.magicalAttack || 0
+      );
+      const bestAttack = Math.max(
+        best.battleStats.physicalAttack || 0, 
+        best.battleStats.magicalAttack || 0
+      );
+      return currentAttack > bestAttack ? current : best;
+    }, null);
+    
+    // Find target with lowest health
+    const weakestTarget = playerField.reduce((weakest, current) => {
+      if (!weakest) return current;
+      return current.currentHealth < weakest.currentHealth ? current : weakest;
+    }, null);
+    
+    // 25% chance to defend if creature is below 30% health or if player has no creatures
+    if (bestAttacker && !bestAttacker.isDefending && 
+        (playerField.length === 0 || 
+         (bestAttacker.currentHealth < bestAttacker.battleStats.maxHealth * 0.3 && Math.random() < 0.25))) {
+      return {
+        type: 'defend',
+        creature: bestAttacker
+      };
+    }
+    
+    // Attack with best attacker against weakest target
+    if (bestAttacker && weakestTarget) {
+      return {
+        type: 'attack',
+        attacker: bestAttacker,
+        target: weakestTarget
+      };
+    }
+  }
+  
+  // Defend with low health creatures
+  if (enemyField.length > 0 && (playerField.length === 0 || Math.random() < 0.4)) {
+    // Find creature with lowest health percentage
+    const lowestHealthCreature = enemyField.reduce((lowest, current) => {
+      if (!current.battleStats || current.isDefending) return lowest;
+      if (!lowest) return current;
+      
+      const currentHealthPercent = current.currentHealth / current.battleStats.maxHealth;
+      const lowestHealthPercent = lowest.currentHealth / lowest.battleStats.maxHealth;
+      return currentHealthPercent < lowestHealthPercent ? current : lowest;
+    }, null);
+    
+    if (lowestHealthCreature && lowestHealthCreature.currentHealth / lowestHealthCreature.battleStats.maxHealth < 0.5) {
+      return {
+        type: 'defend',
+        creature: lowestHealthCreature
+      };
+    }
+  }
+  
+  // If no valid action, end turn
+  return { type: 'endTurn' };
+};
+
+// Custom determineAIAction that uses our fixed AI functions
+const customDetermineAIAction = (
+  difficulty, 
+  enemyHand, 
+  enemyField, 
+  playerField, 
+  enemyTools, 
+  enemySpells, 
+  enemyEnergy
+) => {
+  // Log available resources for debugging
+  console.log(`AI Turn - Difficulty: ${difficulty}`);
+  console.log(`Energy: ${enemyEnergy}, Hand: ${enemyHand.length}, Field: ${enemyField.length}`);
+  
+  // Get the max field size based on difficulty
+  const maxFieldSize = (() => {
+    switch (difficulty) {
+      case 'easy': return 3;
+      case 'medium': return 4;
+      case 'hard': return 5;
+      case 'expert': return 6;
+      default: return 3;
+    }
+  })();
+  
+  // SAFEGUARD: Add safety checks to prevent infinite loops
+  // If no valid action is possible, return 'endTurn'
+  if (
+    // Check if battlefield is full
+    (enemyField.length >= maxFieldSize) ||
+    // Check if no energy
+    enemyEnergy <= 0 ||
+    // Check if no cards in hand or no creatures on field
+    (enemyHand.length === 0 && enemyField.length === 0)
+  ) {
+    console.log("AI SAFEGUARD triggered: Ending turn");
+    return { type: 'endTurn' };
+  }
+  
+  // Use our custom AI functions based on difficulty
+  switch (difficulty) {
+    case 'easy':
+      return determineEasyAIAction(enemyHand, enemyField, playerField, enemyEnergy, maxFieldSize);
+    case 'medium':
+      return determineMediumAIAction(enemyHand, enemyField, playerField, enemyEnergy, maxFieldSize);
+    // You can add customized hard and expert AI functions here
+    case 'hard':
+    case 'expert':
+    default:
+      // Fall back to easy AI for now
+      return determineEasyAIAction(enemyHand, enemyField, playerField, enemyEnergy, maxFieldSize);
+  }
+};
 
 const BattleGame = ({ onClose }) => {
   const { creatureNfts, toolNfts, spellNfts, addNotification } = useContext(GameContext);
   const { connected, accounts } = useRadixConnect();
   
-  // ========== GAME STATE ==========
-  const [gameState, setGameState] = useState('setup'); // setup, battle, victory, defeat
-  const [difficulty, setDifficulty] = useState('easy');
-  const [turn, setTurn] = useState(1);
-  const [activePlayer, setActivePlayer] = useState('player'); // player or enemy
-  const [actionInProgress, setActionInProgress] = useState(false);
-  
-  // ========== PLAYER STATE ==========
-  const [playerDeck, setPlayerDeck] = useState([]);
-  const [playerHand, setPlayerHand] = useState([]);
-  const [playerField, setPlayerField] = useState([]);
-  const [playerEnergy, setPlayerEnergy] = useState(10);
-  const [playerTools, setPlayerTools] = useState([]);
-  const [playerSpells, setPlayerSpells] = useState([]);
-  
-  // ========== ENEMY STATE ==========
-  const [enemyDeck, setEnemyDeck] = useState([]);
-  const [enemyHand, setEnemyHand] = useState([]);
-  const [enemyField, setEnemyField] = useState([]);
-  const [enemyEnergy, setEnemyEnergy] = useState(10);
-  
-  // ========== SELECTION STATE ==========
+  // ========== UI STATE ==========
   const [selectedCreature, setSelectedCreature] = useState(null);
   const [targetCreature, setTargetCreature] = useState(null);
+  const [difficulty, setDifficulty] = useState('easy');
+  const [actionInProgress, setActionInProgress] = useState(false);
   
-  // ========== BATTLE LOG ==========
-  const [battleLog, setBattleLog] = useState([]);
+  // ========== BATTLE STATE (CONSOLIDATED) ==========
+  const [state, dispatch] = useReducer(battleReducer, {
+    gameState: 'setup', // setup, battle, victory, defeat
+    turn: 1,
+    activePlayer: 'player', // player or enemy
+    
+    // Player state
+    playerDeck: [],
+    playerHand: [],
+    playerField: [],
+    playerEnergy: 10,
+    playerTools: [],
+    playerSpells: [],
+    
+    // Enemy state
+    enemyDeck: [],
+    enemyHand: [],
+    enemyField: [],
+    enemyEnergy: 10,
+    
+    // Battle log
+    battleLog: []
+  });
   
-  // Add entry to battle log
-  const addToBattleLog = (message) => {
-    setBattleLog(prev => [...prev, { id: Date.now(), message, turn }]);
-  };
+  // Destructure state for easier access
+  const {
+    gameState,
+    turn,
+    activePlayer,
+    playerDeck,
+    playerHand,
+    playerField,
+    playerEnergy,
+    playerTools,
+    playerSpells,
+    enemyDeck,
+    enemyHand,
+    enemyField,
+    enemyEnergy,
+    battleLog
+  } = state;
   
   // ========== INITIALIZATION ==========
   // Initialize player's deck when component mounts
@@ -69,96 +546,45 @@ const BattleGame = ({ onClose }) => {
           isDefending: false
         };
       });
-      
-      setPlayerDeck(battleCreatures);
     }
-    
-    // Initialize tools and spells
-    if (toolNfts && toolNfts.length > 0) {
-      setPlayerTools(toolNfts);
-    }
-    
-    if (spellNfts && spellNfts.length > 0) {
-      setPlayerSpells(spellNfts);
-    }
-  }, [creatureNfts, toolNfts, spellNfts]);
+  }, [creatureNfts]);
   
-  // Initialize the battle based on the selected difficulty
-  const initializeBattle = () => {
-    if (playerDeck.length === 0) {
-      addNotification("You need creatures to battle!", 400, 300, "#FF5722");
-      return;
-    }
-    
-    // Get the difficulty settings
-    const diffSettings = getDifficultySettings(difficulty);
-    
-    // Generate enemy deck based on difficulty - use the enemyDeckSize setting
-    const enemyCreatures = generateEnemyCreatures(difficulty, diffSettings.enemyDeckSize, playerDeck);
-    
-    // Calculate battle stats for enemy creatures
-    const enemyWithStats = enemyCreatures.map(creature => {
-      const derivedStats = calculateDerivedStats(creature);
-      return {
-        ...creature,
-        battleStats: derivedStats,
-        currentHealth: derivedStats.maxHealth,
-        activeEffects: [],
-        isDefending: false
-      };
-    });
-    
-    // Draw initial hands
-    const playerInitialHand = playerDeck.slice(0, 3);
-    const remainingDeck = playerDeck.slice(3);
-    
-    const enemyInitialHandSize = diffSettings.initialHandSize;
-    const enemyInitialHand = enemyWithStats.slice(0, enemyInitialHandSize);
-    const remainingEnemyDeck = enemyWithStats.slice(enemyInitialHandSize);
-    
-    // Initialize the game state
-    setEnemyDeck(remainingEnemyDeck);
-    setEnemyHand(enemyInitialHand);
-    setPlayerDeck(remainingDeck);
-    setPlayerHand(playerInitialHand);
-    setPlayerField([]);
-    setEnemyField([]);
-    setPlayerEnergy(10);
-    setEnemyEnergy(10);
-    setTurn(1);
-    setActivePlayer('player');
-    setGameState('battle');
-    
-    // Reset battle log
-    setBattleLog([{
-      id: Date.now(),
-      turn: 1,
-      message: `Battle started! Difficulty: ${difficulty.charAt(0).toUpperCase() + difficulty.slice(1)}`
-    }]);
-    
-    // Add initial battle log entry
-    addToBattleLog('Your turn. Select a creature to deploy or take action!');
-  };
+  // ========== BATTLE LOG ==========
+  // Add entry to battle log (memoized for dependency stability)
+  const addToBattleLog = useCallback((message) => {
+    dispatch({ type: ACTIONS.ADD_LOG, message });
+  }, []);
   
   // ========== BATTLE MECHANICS ==========
-  // Regenerate energy at the start of a turn
-  const regenerateEnergy = () => {
-    const diffSettings = getDifficultySettings(difficulty);
+  // Regenerate energy at the start of a turn (memoized)
+  const regenerateEnergy = useCallback(() => {
+    // NEW ENERGY REGENERATION MODEL - per-turn increase instead of reset
+    const BASE_REGEN = 4; // Base regeneration per turn
     
-    // Calculate player energy regen
-    let playerRegen = 3; // Base regen
+    // Calculate player energy bonus from creatures' energy stat
+    let playerBonus = 0;
     playerField.forEach(creature => {
       if (creature.stats && creature.stats.energy) {
-        playerRegen += Math.floor(creature.stats.energy * 0.2); // +0.2 per energy point
+        playerBonus += Math.floor(creature.stats.energy * 0.2); // +0.2 per energy point
       }
     });
     
-    // Calculate enemy energy regen
-    let enemyRegen = diffSettings.enemyEnergyRegen;
+    // Calculate enemy energy bonus from creatures' energy stat
+    let enemyBonus = 0;
+    enemyField.forEach(creature => {
+      if (creature.stats && creature.stats.energy) {
+        enemyBonus += Math.floor(creature.stats.energy * 0.2);
+      }
+    });
+    
+    // Total regeneration amounts
+    const playerRegen = BASE_REGEN + playerBonus;
+    const enemyRegen = BASE_REGEN + enemyBonus;
+    
+    console.log(`Regenerating energy - Player: +${playerRegen} (base ${BASE_REGEN} + ${playerBonus} bonus), Enemy: +${enemyRegen} (base ${BASE_REGEN} + ${enemyBonus} bonus)`);
     
     // Apply regeneration (cap at 15)
-    setPlayerEnergy(prev => Math.min(15, prev + playerRegen));
-    setEnemyEnergy(prev => Math.min(15, prev + enemyRegen));
+    dispatch({ type: ACTIONS.REGENERATE_ENERGY, playerRegen, enemyRegen });
     
     // Log energy regeneration
     if (activePlayer === 'player') {
@@ -166,10 +592,16 @@ const BattleGame = ({ onClose }) => {
     } else {
       addToBattleLog(`Enemy gained +${enemyRegen} energy.`);
     }
-  };
+  }, [activePlayer, playerField, enemyField, addToBattleLog]);
   
-  // Apply ongoing effects (buffs/debuffs/DoT)
-  const applyOngoingEffects = () => {
+  // Apply ongoing effects (buffs/debuffs/DoT) - memoized with the latest state
+  const applyOngoingEffects = useCallback(() => {
+    // Get the latest field state for processing
+    console.log("Applying ongoing effects - Before: ", {
+      playerField: playerField.length,
+      enemyField: enemyField.length
+    });
+    
     // Process player field effects
     const updatedPlayerField = playerField.map(creature => {
       let updatedCreature = { ...creature };
@@ -230,7 +662,7 @@ const BattleGame = ({ onClose }) => {
       return updatedCreature;
     });
     
-    // Process enemy field effects
+    // Process enemy field effects - using the current enemyField
     const updatedEnemyField = enemyField.map(creature => {
       let updatedCreature = { ...creature };
       let effectLog = [];
@@ -242,7 +674,7 @@ const BattleGame = ({ onClose }) => {
         const remainingEffects = [];
         
         activeEffects.forEach(effect => {
-          // Apply effect (similar to player creatures)
+          // Apply effect
           if (effect.healthEffect) {
             updatedCreature.currentHealth = Math.min(
               updatedCreature.battleStats.maxHealth,
@@ -289,13 +721,19 @@ const BattleGame = ({ onClose }) => {
       return updatedCreature;
     });
     
-    // Update fields
-    setPlayerField(updatedPlayerField);
-    setEnemyField(updatedEnemyField);
+    console.log("Field size after effects processing, before health filtering:", {
+      playerField: updatedPlayerField.length,
+      enemyField: updatedEnemyField.length
+    });
     
-    // Remove defeated creatures
+    // Remove only creatures with 0 or less health
     const alivePlayerCreatures = updatedPlayerField.filter(creature => creature.currentHealth > 0);
     const aliveEnemyCreatures = updatedEnemyField.filter(creature => creature.currentHealth > 0);
+    
+    console.log("Field size after health filtering:", {
+      playerField: alivePlayerCreatures.length,
+      enemyField: aliveEnemyCreatures.length
+    });
     
     // Log defeated creatures
     if (alivePlayerCreatures.length < updatedPlayerField.length) {
@@ -308,13 +746,29 @@ const BattleGame = ({ onClose }) => {
       addToBattleLog(`${defeatedCount} enemy creatures were defeated!`);
     }
     
-    setPlayerField(alivePlayerCreatures);
-    setEnemyField(aliveEnemyCreatures);
-  };
+    // Apply the updates to the state
+    dispatch({ 
+      type: ACTIONS.APPLY_ONGOING_EFFECTS, 
+      updatedPlayerField: alivePlayerCreatures, 
+      updatedEnemyField: aliveEnemyCreatures
+    });
+  }, [playerField, enemyField, addToBattleLog]);
+  
+  // Check for win condition - memoized
+  const checkWinCondition = useCallback(() => {
+    // Win if all enemy creatures are defeated (both in hand and field)
+    return enemyField.length === 0 && enemyHand.length === 0 && enemyDeck.length === 0;
+  }, [enemyField, enemyHand, enemyDeck]);
+  
+  // Check for loss condition - memoized
+  const checkLossCondition = useCallback(() => {
+    // Lose if all player creatures are defeated (both in hand and field)
+    return playerField.length === 0 && playerHand.length === 0 && playerDeck.length === 0;
+  }, [playerField, playerHand, playerDeck]);
   
   // ========== PLAYER ACTIONS ==========
-  // Deploy a creature from hand to field
-  const deployCreature = (creature) => {
+  // Deploy a creature from hand to field - memoized
+  const deployCreature = useCallback((creature) => {
     if (!creature) return;
     
     // Check if field is full
@@ -330,22 +784,17 @@ const BattleGame = ({ onClose }) => {
       return;
     }
     
-    // Remove creature from hand
-    const updatedHand = playerHand.filter(c => c.id !== creature.id);
-    setPlayerHand(updatedHand);
-    
-    // Add creature to field
-    setPlayerField(prev => [...prev, creature]);
-    
-    // Deduct energy
-    setPlayerEnergy(prev => prev - energyCost);
+    // Deploy creature
+    dispatch({ type: ACTIONS.DEPLOY_CREATURE, creature, energyCost });
     
     // Log deployment
     addToBattleLog(`You deployed ${creature.species_name} to the battlefield! (-${energyCost} energy)`);
-  };
+    
+    console.log(`Deployed ${creature.species_name} to player field`);
+  }, [playerField, playerEnergy, addToBattleLog]);
   
-  // Attack with a creature
-  const attackCreature = (attacker, defender) => {
+  // Attack with a creature - memoized
+  const attackCreature = useCallback((attacker, defender) => {
     if (!attacker || !defender) {
       addToBattleLog("Invalid attack - missing attacker or defender");
       return;
@@ -359,43 +808,15 @@ const BattleGame = ({ onClose }) => {
     // Process attack
     const attackResult = processAttack(attacker, defender, attackType);
     
-    // Update attacker
-    const isPlayerAttacker = playerField.some(c => c.id === attacker.id);
-    
-    // Update attacker in appropriate field
-    if (isPlayerAttacker) {
-      setPlayerField(prev => 
-        prev.map(c => c.id === attacker.id ? attackResult.updatedAttacker : c)
-      );
-    } else {
-      setEnemyField(prev => 
-        prev.map(c => c.id === attacker.id ? attackResult.updatedAttacker : c)
-      );
-    }
-    
-    // Update defender
-    const isPlayerDefender = playerField.some(c => c.id === defender.id);
-    
-    if (isPlayerDefender) {
-      setPlayerField(prev => 
-        prev.map(c => c.id === defender.id ? attackResult.updatedDefender : c)
-      );
-    } else {
-      setEnemyField(prev => 
-        prev.map(c => c.id === defender.id ? attackResult.updatedDefender : c)
-      );
-    }
+    // Update attacker and defender in state
+    dispatch({ type: ACTIONS.ATTACK, attackResult });
     
     // Log attack result
     addToBattleLog(attackResult.battleLog);
-    
-    // Clear selections
-    setSelectedCreature(null);
-    setTargetCreature(null);
-  };
+  }, [addToBattleLog]);
   
-  // Use a tool on a creature
-  const useTool = (tool, targetCreature) => {
+  // Use a tool on a creature - memoized
+  const useTool = useCallback((tool, targetCreature) => {
     if (!tool || !targetCreature) {
       addToBattleLog("Invalid tool use - missing tool or target");
       return;
@@ -405,33 +826,17 @@ const BattleGame = ({ onClose }) => {
     const result = applyTool(targetCreature, tool);
     
     // Update target creature
-    const isPlayerTarget = playerField.some(c => c.id === targetCreature.id);
-    
-    if (isPlayerTarget) {
-      setPlayerField(prev => 
-        prev.map(c => c.id === targetCreature.id ? result.updatedCreature : c)
-      );
-    } else {
-      setEnemyField(prev => 
-        prev.map(c => c.id === targetCreature.id ? result.updatedCreature : c)
-      );
-    }
+    dispatch({ type: ACTIONS.USE_TOOL, result, tool });
     
     // Log tool use
+    const isPlayerTarget = playerField.some(c => c.id === targetCreature.id);
     addToBattleLog(
       `${tool.name} was used on ${isPlayerTarget ? '' : 'enemy '}${targetCreature.species_name}.`
     );
-    
-    // Remove tool from inventory (one-time use)
-    setPlayerTools(prev => prev.filter(t => t.id !== tool.id));
-    
-    // Clear selections
-    setSelectedCreature(null);
-    setTargetCreature(null);
-  };
+  }, [playerField, addToBattleLog]);
   
-  // Cast a spell
-  const useSpell = (spell, caster, target) => {
+  // Cast a spell - memoized
+  const useSpell = useCallback((spell, caster, target) => {
     if (!spell || !caster) {
       addToBattleLog("Invalid spell cast - missing spell or caster");
       return;
@@ -446,38 +851,10 @@ const BattleGame = ({ onClose }) => {
     }
     
     // Process spell cast
-    const result = applySpell(caster, target || caster, spell);
+    const spellResult = applySpell(caster, target || caster, spell);
     
-    // Update caster
-    const isPlayerCaster = playerField.some(c => c.id === caster.id);
-    
-    if (isPlayerCaster) {
-      setPlayerField(prev => 
-        prev.map(c => c.id === caster.id ? result.updatedCaster : c)
-      );
-    } else {
-      setEnemyField(prev => 
-        prev.map(c => c.id === caster.id ? result.updatedCaster : c)
-      );
-    }
-    
-    // Update target if different from caster
-    if (target && target.id !== caster.id) {
-      const isPlayerTarget = playerField.some(c => c.id === target.id);
-      
-      if (isPlayerTarget) {
-        setPlayerField(prev => 
-          prev.map(c => c.id === target.id ? result.updatedTarget : c)
-        );
-      } else {
-        setEnemyField(prev => 
-          prev.map(c => c.id === target.id ? result.updatedTarget : c)
-        );
-      }
-    }
-    
-    // Deduct energy
-    setPlayerEnergy(prev => prev - energyCost);
+    // Update caster and target
+    dispatch({ type: ACTIONS.USE_SPELL, spellResult, spell, energyCost });
     
     // Log spell cast
     const targetText = target && target.id !== caster.id 
@@ -487,17 +864,10 @@ const BattleGame = ({ onClose }) => {
     addToBattleLog(
       `${caster.species_name} cast ${spell.name} ${targetText}. (-${energyCost} energy)`
     );
-    
-    // Remove spell from inventory (one-time use)
-    setPlayerSpells(prev => prev.filter(s => s.id !== spell.id));
-    
-    // Clear selections
-    setSelectedCreature(null);
-    setTargetCreature(null);
-  };
+  }, [playerEnergy, playerField, addToBattleLog]);
   
-  // Put a creature in defensive stance
-  const defendCreatureAction = (creature) => {
+  // Put a creature in defensive stance - memoized
+  const defendCreatureAction = useCallback((creature) => {
     if (!creature) {
       addToBattleLog("Invalid defend action - no creature selected");
       return;
@@ -507,47 +877,118 @@ const BattleGame = ({ onClose }) => {
     const updatedCreature = defendCreature(creature);
     
     // Update creature in appropriate field
-    const isPlayerCreature = playerField.some(c => c.id === creature.id);
-    
-    if (isPlayerCreature) {
-      setPlayerField(prev => 
-        prev.map(c => c.id === creature.id ? updatedCreature : c)
-      );
-    } else {
-      setEnemyField(prev => 
-        prev.map(c => c.id === creature.id ? updatedCreature : c)
-      );
-    }
+    dispatch({ type: ACTIONS.DEFEND, updatedCreature });
     
     // Log defend action
+    const isPlayerCreature = playerField.some(c => c.id === creature.id);
     addToBattleLog(
       `${isPlayerCreature ? '' : 'Enemy '}${creature.species_name} took a defensive stance!`
     );
+  }, [playerField, addToBattleLog]);
+  
+  // ========== BATTLE INITIALIZATION ==========
+  // Initialize the battle based on the selected difficulty
+  const initializeBattle = useCallback(() => {
+    if (!creatureNfts || creatureNfts.length === 0) {
+      addNotification("You need creatures to battle!", 400, 300, "#FF5722");
+      return;
+    }
     
-    // Clear selections
-    setSelectedCreature(null);
-    setTargetCreature(null);
-  };
-  
-  // ========== TURN MANAGEMENT ==========
-  // Check for win/loss conditions
-  const checkWinCondition = () => {
-    // Win if all enemy creatures are defeated (both in hand and field)
-    return enemyField.length === 0 && enemyHand.length === 0 && enemyDeck.length === 0;
-  };
-  
-  const checkLossCondition = () => {
-    // Lose if all player creatures are defeated (both in hand and field)
-    return playerField.length === 0 && playerHand.length === 0 && playerDeck.length === 0;
-  };
-  
+    // Create battle-ready versions of player creatures
+    const battleCreatures = creatureNfts.map(creature => {
+      // Calculate derived battle stats
+      const derivedStats = calculateDerivedStats(creature);
+      
+      return {
+        ...creature,
+        battleStats: derivedStats,
+        currentHealth: derivedStats.maxHealth,
+        activeEffects: [],
+        isDefending: false
+      };
+    });
     
-  // Handle the enemy's turn (AI)
+    // Get the difficulty settings
+    const diffSettings = getDifficultySettings(difficulty);
+    
+    // Generate enemy deck based on difficulty
+    const enemyCreatures = generateEnemyCreatures(difficulty, diffSettings.enemyDeckSize, battleCreatures);
+    
+    // Calculate battle stats for enemy creatures and assign more reasonable energy costs
+    const enemyWithStats = enemyCreatures.map((creature, index) => {
+      const derivedStats = calculateDerivedStats(creature);
+      
+      // Ensure enemy creatures have reasonable energy costs
+      // Assign costs that increase with form and rarity
+      let energyCost = 3; // Base cost
+      
+      // Adjust cost based on form (0-3)
+      if (creature.form) {
+        energyCost += creature.form;
+      }
+      
+      // Further adjustment based on rarity
+      if (creature.rarity === 'Rare') energyCost += 1;
+      else if (creature.rarity === 'Epic') energyCost += 2;
+      else if (creature.rarity === 'Legendary') energyCost += 3;
+      
+      // Cap at 9 energy for the most expensive creatures
+      energyCost = Math.min(9, energyCost);
+      
+      // Make first enemy creature very affordable to ensure action on first turn
+      if (index === 0) {
+        energyCost = 3;
+      }
+      
+      // Update the derived stats with the assigned energy cost
+      derivedStats.energyCost = energyCost;
+      
+      console.log(`Enemy creature: ${creature.species_name}, Form: ${creature.form}, Rarity: ${creature.rarity}, Energy Cost: ${energyCost}`);
+      
+      return {
+        ...creature,
+        battleStats: derivedStats,
+        currentHealth: derivedStats.maxHealth,
+        activeEffects: [],
+        isDefending: false
+      };
+    });
+    
+    // Draw initial hands
+    const playerInitialHand = battleCreatures.slice(0, 3);
+    const remainingDeck = battleCreatures.slice(3);
+    
+    const enemyInitialHandSize = diffSettings.initialHandSize;
+    const enemyInitialHand = enemyWithStats.slice(0, enemyInitialHandSize);
+    const remainingEnemyDeck = enemyWithStats.slice(enemyInitialHandSize);
+    
+    // Initialize tools and spells
+    const initialPlayerTools = toolNfts || [];
+    const initialPlayerSpells = spellNfts || [];
+    
+    // Initialize the game state
+    dispatch({
+      type: ACTIONS.START_BATTLE,
+      playerDeck: remainingDeck,
+      playerHand: playerInitialHand,
+      playerTools: initialPlayerTools,
+      playerSpells: initialPlayerSpells,
+      enemyDeck: remainingEnemyDeck,
+      enemyHand: enemyInitialHand,
+      difficulty
+    });
+    
+    // Add initial battle log entry
+    addToBattleLog('Your turn. Select a creature to deploy or take action!');
+  }, [creatureNfts, toolNfts, spellNfts, difficulty, addNotification, addToBattleLog]);
+  
+  // ========== ENEMY AI ==========
+  // Handle the enemy's turn (AI) - memoized
   const handleEnemyTurn = useCallback(() => {
-    console.log("Enemy turn triggered. Energy:", enemyEnergy, "Hand:", enemyHand.length, "Field:", enemyField.length);
+    console.log("Enemy turn processing. Energy:", enemyEnergy, "Hand:", enemyHand.length, "Field:", enemyField.length);
     
-    // Determine AI action based on difficulty
-    const aiAction = determineAIAction(
+    // Use our custom AI function that properly filters affordable creatures
+    const aiAction = customDetermineAIAction(
       difficulty, 
       enemyHand, 
       enemyField, 
@@ -572,7 +1013,7 @@ const BattleGame = ({ onClose }) => {
         // Get energy cost for the creature
         const energyCost = aiAction.energyCost || aiAction.creature.battleStats?.energyCost || 3;
         
-        // Double-check if we have enough energy (this is also checked in determineAIAction)
+        // Double-check if we have enough energy (already should be validated in AI logic now)
         if (enemyEnergy < energyCost) {
           console.log("AI Error: Not enough energy to deploy");
           addToBattleLog("Enemy doesn't have enough energy to deploy");
@@ -581,18 +1022,20 @@ const BattleGame = ({ onClose }) => {
         
         console.log("AI deploying creature:", aiAction.creature.species_name, "Cost:", energyCost);
         
-        // Deduct energy
-        setEnemyEnergy(prev => Math.max(0, prev - energyCost));
-        
-        // Remove creature from enemy hand
-        const updatedHand = enemyHand.filter(c => c.id !== aiAction.creature.id);
-        setEnemyHand(updatedHand);
-        
-        // Add creature to enemy field
-        setEnemyField(prev => [...prev, aiAction.creature]);
+        // Deploy the creature
+        dispatch({
+          type: ACTIONS.ENEMY_DEPLOY_CREATURE,
+          creature: aiAction.creature,
+          energyCost
+        });
         
         // Log deployment
         addToBattleLog(`Enemy deployed ${aiAction.creature.species_name} to the battlefield! (-${energyCost} energy)`);
+        
+        // Debug logging
+        console.log("After deployment - Enemy hand:", enemyHand);
+        console.log("After deployment - Enemy energy:", enemyEnergy);
+        console.log("After deployment - Enemy field:", enemyField);
         break;
         
       case 'attack':
@@ -643,60 +1086,193 @@ const BattleGame = ({ onClose }) => {
     defendCreatureAction
   ]);
   
+  // ========== TURN PROCESSING ==========
+  // Process enemy turn completely
+  const processEnemyTurn = useCallback(() => {
+    console.log("Starting enemy turn...");
+    
+    // Execute enemy AI action
+    handleEnemyTurn();
+    
+    // CRITICAL FIX: Use setTimeout to ensure the creature deployment has been processed
+    // before applying effects and continuing with the turn
+    setTimeout(() => {
+      console.log("Now processing effects and finishing turn");
+      console.log("Enemy field before effects:", enemyField);
+      
+      // Check win/loss conditions
+      if (checkWinCondition()) {
+        dispatch({ type: ACTIONS.SET_GAME_STATE, gameState: 'victory' });
+        addToBattleLog("Victory! You've defeated all enemy creatures!");
+        setActionInProgress(false);
+        return;
+      }
+      
+      if (checkLossCondition()) {
+        dispatch({ type: ACTIONS.SET_GAME_STATE, gameState: 'defeat' });
+        addToBattleLog("Defeat! All your creatures have been defeated!");
+        setActionInProgress(false);
+        return;
+      }
+      
+      // Apply ongoing effects now that we have the updated state
+      applyOngoingEffects();
+      
+      // Increment turn counter
+      dispatch({ type: ACTIONS.INCREMENT_TURN });
+      
+      // Switch back to player turn
+      dispatch({ type: ACTIONS.SET_ACTIVE_PLAYER, player: 'player' });
+      
+      // Draw card for player if possible
+      if (playerHand.length < 5 && playerDeck.length > 0) {
+        dispatch({ type: ACTIONS.DRAW_CARD, player: 'player' });
+        addToBattleLog(`You drew ${playerDeck[0].species_name}.`);
+      }
+      
+      // Draw card for enemy if possible
+      if (enemyHand.length < getDifficultySettings(difficulty).initialHandSize && enemyDeck.length > 0) {
+        dispatch({ type: ACTIONS.DRAW_CARD, player: 'enemy' });
+        addToBattleLog(`Enemy drew a card.`);
+      }
+      
+      // Regenerate energy (now using our improved model)
+      regenerateEnergy();
+      
+      addToBattleLog(`Turn ${turn + 1} - Your turn.`);
+      
+      console.log("End of enemy turn - Enemy field:", enemyField);
+      
+      // Unlock the UI
+      setActionInProgress(false);
+      
+      console.log("Enemy turn complete");
+    }, 0); // Zero ms timeout ensures this runs after React updates state
+  }, [
+    handleEnemyTurn,
+    enemyField,
+    checkWinCondition,
+    checkLossCondition,
+    applyOngoingEffects,
+    regenerateEnergy,
+    playerHand,
+    playerDeck,
+    enemyHand,
+    enemyDeck,
+    difficulty,
+    turn,
+    addToBattleLog
+  ]);
+  
   // ========== EVENT HANDLERS ==========
-  // Handle player action
+  // Handle player action - memoized
   const handlePlayerAction = useCallback((action, targetCreature, sourceCreature) => {
     // Prevent actions during animations or AI turn
-    if (actionInProgress || activePlayer !== 'player') {
+    if (actionInProgress || activePlayer !== 'player' || gameState !== 'battle') {
       console.log("Ignoring player action - action in progress or not player turn");
       return;
     }
     
     console.log("Player action:", action.type);
     
-    // Set action in progress
-    setActionInProgress(true);
+    // Clear selections for next action
+    const clearSelections = () => {
+      setSelectedCreature(null);
+      setTargetCreature(null);
+    };
     
     // Process player action based on action type
     switch(action.type) {
       case 'deploy':
+        setActionInProgress(true);
         deployCreature(sourceCreature);
+        clearSelections();
+        
+        // Release UI lock after a short delay
+        setTimeout(() => setActionInProgress(false), 300);
         break;
+        
       case 'attack':
+        setActionInProgress(true);
         attackCreature(sourceCreature, targetCreature);
+        clearSelections();
+        
+        // Release UI lock after a short delay
+        setTimeout(() => setActionInProgress(false), 300);
         break;
+        
       case 'useTool':
+        setActionInProgress(true);
         useTool(action.tool, sourceCreature);
+        clearSelections();
+        
+        // Release UI lock after a short delay
+        setTimeout(() => setActionInProgress(false), 300);
         break;
+        
       case 'useSpell':
+        setActionInProgress(true);
         useSpell(action.spell, sourceCreature, targetCreature);
+        clearSelections();
+        
+        // Release UI lock after a short delay
+        setTimeout(() => setActionInProgress(false), 300);
         break;
+        
       case 'defend':
+        setActionInProgress(true);
         defendCreatureAction(sourceCreature);
+        clearSelections();
+        
+        // Release UI lock after a short delay
+        setTimeout(() => setActionInProgress(false), 300);
         break;
+        
       case 'endTurn':
-        // Handle end turn directly here
+        // Handle end turn - CRITICAL FIX!
+        // Lock the UI during turn transition
+        setActionInProgress(true);
+        clearSelections();
+        
+        // First, check if game is over
         if (checkWinCondition()) {
-          setGameState('victory');
+          dispatch({ type: ACTIONS.SET_GAME_STATE, gameState: 'victory' });
           addToBattleLog("Victory! You've defeated all enemy creatures!");
-        } else if (checkLossCondition()) {
-          setGameState('defeat');
+          setActionInProgress(false);
+          return;
+        } 
+        
+        if (checkLossCondition()) {
+          dispatch({ type: ACTIONS.SET_GAME_STATE, gameState: 'defeat' });
           addToBattleLog("Defeat! All your creatures have been defeated!");
-        } else {
-          // End player turn
-          setActivePlayer('enemy');
-          addToBattleLog(`Turn ${turn} - Enemy's turn.`);
+          setActionInProgress(false);
+          return;
         }
+        
+        // Apply ongoing effects for player's turn BEFORE switching to enemy
+        applyOngoingEffects();
+        
+        // Set active player to enemy
+        dispatch({ type: ACTIONS.SET_ACTIVE_PLAYER, player: 'enemy' });
+        addToBattleLog(`Turn ${turn} - Enemy's turn.`);
+        
+        // CRITICAL FIX: Handle enemy turn with a single timeout
+        // This completely bypasses the useEffect pattern and makes the enemy turn deterministic
+        setTimeout(() => {
+          // Only proceed if game is still in battle state
+          if (gameState === 'battle') {
+            processEnemyTurn();
+          } else {
+            setActionInProgress(false);
+          }
+        }, 750);
         break;
+        
       default:
         addToBattleLog('Invalid action');
     }
-    
-    // Clear action in progress with a short delay for visual feedback
-    setTimeout(() => {
-      setActionInProgress(false);
-    }, 300);
   }, [
+    gameState,
     activePlayer,
     actionInProgress,
     turn,
@@ -707,34 +1283,45 @@ const BattleGame = ({ onClose }) => {
     defendCreatureAction,
     checkWinCondition,
     checkLossCondition,
-    addToBattleLog
+    applyOngoingEffects,
+    addToBattleLog,
+    processEnemyTurn
   ]);
   
   // Handle creature selection
-  const handleCreatureSelect = (creature, isEnemy) => {
+  const handleCreatureSelect = useCallback((creature, isEnemy) => {
     // Cannot select creatures during AI turn
-    if (activePlayer !== 'player') return;
+    if (activePlayer !== 'player' || actionInProgress) return;
     
     if (isEnemy) {
       // If selecting an enemy creature, set it as the target
-      setTargetCreature(creature);
+      setTargetCreature(prevTarget => {
+        // Toggle target selection if clicking the same creature
+        return prevTarget && prevTarget.id === creature.id ? null : creature;
+      });
     } else {
       // If selecting a player creature, set it as the selected creature
-      setSelectedCreature(creature);
+      setSelectedCreature(prevSelected => {
+        // Toggle selection if clicking the same creature
+        return prevSelected && prevSelected.id === creature.id ? null : creature;
+      });
     }
-  };
+  }, [activePlayer, actionInProgress]);
   
   // Handle card selection from hand
-  const handleSelectCard = (creature) => {
+  const handleSelectCard = useCallback((creature) => {
     // Cannot select cards during AI turn
-    if (activePlayer !== 'player') return;
+    if (activePlayer !== 'player' || actionInProgress) return;
     
-    setSelectedCreature(creature);
+    setSelectedCreature(prevSelected => {
+      // Toggle selection if clicking the same card
+      return prevSelected && prevSelected.id === creature.id ? null : creature;
+    });
     setTargetCreature(null);
-  };
+  }, [activePlayer, actionInProgress]);
   
   // Get available actions for the selected creature
-  const getAvailableActions = (selectedCreature, targetCreature) => {
+  const getAvailableActions = useCallback((selectedCreature, targetCreature) => {
     if (!selectedCreature) return [];
     
     const actions = [];
@@ -769,7 +1356,7 @@ const BattleGame = ({ onClose }) => {
     actions.push('endTurn');
     
     return actions;
-  };
+  }, [playerHand, playerField, enemyField, playerTools, playerSpells]);
   
   // ========== EFFECTS ==========
   // Effect to handle game state changes, victory/defeat conditions
@@ -778,118 +1365,14 @@ const BattleGame = ({ onClose }) => {
     
     // Check win/loss conditions after every state change
     if (checkWinCondition()) {
-      setGameState('victory');
+      dispatch({ type: ACTIONS.SET_GAME_STATE, gameState: 'victory' });
       addToBattleLog("Victory! You've defeated all enemy creatures!");
     } else if (checkLossCondition()) {
-      setGameState('defeat');
+      dispatch({ type: ACTIONS.SET_GAME_STATE, gameState: 'defeat' });
       addToBattleLog("Defeat! All your creatures have been defeated!");
     }
-  }, [gameState, enemyField, enemyHand, enemyDeck, playerField, playerHand, playerDeck]);
+  }, [gameState, checkWinCondition, checkLossCondition, addToBattleLog]);
   
-  // Effect to handle enemy turn
-  useEffect(() => {
-    // Only run this effect when it's the enemy's turn and game is in battle state
-    if (gameState !== 'battle' || activePlayer !== 'enemy') {
-      return;
-    }
-    
-    console.log("Enemy turn effect triggered. Action in progress:", actionInProgress);
-    
-    // Only proceed if an action is not already in progress
-    if (actionInProgress) {
-      return;
-    }
-    
-    // Set action in progress to prevent multiple triggers
-    setActionInProgress(true);
-    
-    // Add a delay for visual feedback
-    const timeoutId = setTimeout(() => {
-      try {
-        console.log("Executing enemy turn...");
-        
-        // Handle enemy turn
-        handleEnemyTurn();
-        
-        // Wait a moment, then end enemy turn
-        setTimeout(() => {
-          console.log("Ending enemy turn...");
-          
-          // Check game state again for win/loss conditions after enemy action
-          if (checkWinCondition()) {
-            console.log("Victory condition met after enemy turn");
-            setGameState('victory');
-            addToBattleLog("Victory! You've defeated all enemy creatures!");
-          } else if (checkLossCondition()) {
-            console.log("Defeat condition met after enemy turn");
-            setGameState('defeat');
-            addToBattleLog("Defeat! All your creatures have been defeated!");
-          } else {
-            // End enemy turn normally
-            // Increment turn counter
-            setTurn(prev => prev + 1);
-            
-            // Switch to player turn
-            setActivePlayer('player');
-            
-            // Apply turn effects
-            applyOngoingEffects();
-            
-            // Draw card for player if possible
-            if (playerHand.length < 5 && playerDeck.length > 0) {
-              const drawnCard = playerDeck[0];
-              setPlayerHand(prev => [...prev, drawnCard]);
-              setPlayerDeck(prev => prev.slice(1));
-              addToBattleLog(`You drew ${drawnCard.species_name}.`);
-            }
-            
-            // Draw card for enemy if possible
-            if (enemyHand.length < getDifficultySettings(difficulty).initialHandSize && enemyDeck.length > 0) {
-              const drawnCard = enemyDeck[0];
-              setEnemyHand(prev => [...prev, drawnCard]);
-              setEnemyDeck(prev => prev.slice(1));
-              addToBattleLog(`Enemy drew a card.`);
-            }
-            
-            // Regenerate energy
-            regenerateEnergy();
-            
-            addToBattleLog(`Turn ${turn + 1} - Your turn.`);
-          }
-          
-          // Clear action in progress flag
-          setActionInProgress(false);
-        }, 500);
-      } catch (error) {
-        console.error("Error during enemy turn:", error);
-        
-        // If there's an error, still end the turn
-        setActivePlayer('player');
-        setTurn(prev => prev + 1);
-        addToBattleLog("Enemy turn encountered an error. Your turn now.");
-        setActionInProgress(false);
-      }
-    }, 750);
-    
-    return () => clearTimeout(timeoutId);
-  }, [
-    gameState, 
-    activePlayer, 
-    actionInProgress, 
-    handleEnemyTurn,
-    checkWinCondition,
-    checkLossCondition,
-    playerHand,
-    playerDeck,
-    enemyHand,
-    enemyDeck,
-    difficulty,
-    turn,
-    applyOngoingEffects,
-    regenerateEnergy,
-    addToBattleLog
-  ]);
-
   // ========== RENDER ==========
   return (
     <div className="battle-game-overlay">
@@ -898,7 +1381,7 @@ const BattleGame = ({ onClose }) => {
           <DifficultySelector 
             onSelectDifficulty={setDifficulty} 
             onStartBattle={initializeBattle}
-            creatureCount={playerDeck.length + playerHand.length + playerField.length} 
+            creatureCount={creatureNfts?.length || 0} 
             difficulty={difficulty}
           />
         )}
@@ -949,7 +1432,7 @@ const BattleGame = ({ onClose }) => {
         {(gameState === 'victory' || gameState === 'defeat') && (
           <BattleResult 
             result={gameState} 
-            onPlayAgain={() => setGameState('setup')}
+            onPlayAgain={() => dispatch({ type: ACTIONS.SET_GAME_STATE, gameState: 'setup' })}
             onClose={onClose}
             stats={{
               turns: turn,
