@@ -1,0 +1,828 @@
+/* src/styles/battle.css */
+
+/* Battle game overlay container */
+.battle-game-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(3px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9995;
+}
+
+/* Main battle container */
+.battle-game {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  background-color: #1a1a2e;
+  border-radius: 10px;
+  overflow: hidden;
+  color: #e6e6e6;
+  font-family: 'Orbitron', sans-serif;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+}
+
+/* Difficulty selector styles */
+.difficulty-selector {
+  padding: 20px;
+  text-align: center;
+}
+
+.difficulty-selector h2 {
+  color: #4CAF50;
+  margin-bottom: 20px;
+  font-size: 28px;
+}
+
+.difficulty-description {
+  margin-bottom: 25px;
+}
+
+.difficulty-options {
+  display: flex;
+  justify-content: center;
+  gap: 15px;
+  flex-wrap: wrap;
+  margin-bottom: 30px;
+}
+
+.difficulty-option {
+  width: 200px;
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: #2a2a3e;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border: 2px solid transparent;
+}
+
+.difficulty-option.selected {
+  transform: translateY(-5px);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+}
+
+.difficulty-header {
+  padding: 10px;
+  font-weight: bold;
+  text-align: center;
+  color: #000;
+}
+
+.difficulty-content {
+  padding: 15px;
+  font-size: 14px;
+}
+
+.battle-controls {
+  margin-top: 30px;
+}
+
+.start-battle-btn {
+  padding: 12px 30px;
+  font-size: 18px;
+  font-weight: bold;
+  border: none;
+  border-radius: 8px;
+  color: #000;
+  cursor: pointer;
+  font-family: 'Orbitron', sans-serif;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.start-battle-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+}
+
+.start-battle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Battle header styles */
+.battle-header {
+  background-color: #191919;
+  padding: 10px 15px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #333;
+}
+
+.battle-info {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.turn-counter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background-color: #333;
+  padding: 5px 10px;
+  border-radius: 5px;
+}
+
+.turn-label {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.turn-number {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.difficulty-indicator {
+  padding: 5px 10px;
+  border-radius: 5px;
+  font-weight: bold;
+  color: #000;
+}
+
+.active-player-indicator {
+  font-weight: bold;
+}
+
+.player-active {
+  color: #4CAF50;
+}
+
+.enemy-active {
+  color: #F44336;
+}
+
+.energy-displays {
+  display: flex;
+  gap: 20px;
+}
+
+.player-energy, .enemy-energy {
+  text-align: center;
+}
+
+.energy-label {
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.energy-value {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.energy-bar-container {
+  width: 100px;
+  height: 8px;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 3px;
+}
+
+.energy-bar {
+  height: 100%;
+  background-color: #4CAF50;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.energy-bar.enemy {
+  background-color: #F44336;
+}
+
+/* Battlefield styles */
+.battlefield-container {
+  position: relative;
+  width: 100%;
+  background-color: #151515;
+}
+
+.battlefield {
+  display: flex;
+  flex-direction: column;
+  min-height: 400px;
+  padding: 10px;
+  background-image: linear-gradient(to bottom, #1a1a2e, #121220);
+  position: relative;
+}
+
+/* Updated battlefield styles for variable number of creatures */
+.battlefield-enemy,
+.battlefield-player {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 15px 10px;
+  min-height: 160px;
+}
+
+/* Adjustments for larger enemy field sizes (expert mode) */
+.battlefield-enemy {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.battlefield-player {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.battlefield-center {
+  height: 60px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.creature-slot {
+  width: 140px;
+  height: 220px;
+  border-radius: 8px;
+  border: 2px dashed rgba(255, 255, 255, 0.2);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 5px;
+}
+
+.creature-slot.empty::after {
+  content: 'Empty';
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 14px;
+}
+
+/* Make slots smaller when there are more of them */
+@media (min-width: 769px) {
+  .battlefield-enemy.large-field .creature-slot,
+  .battlefield-enemy.large-field .creature-card {
+    width: 120px;
+    height: 200px;
+  }
+}
+
+/* Creature card styles */
+.creature-card {
+  width: 140px;
+  height: 220px;
+  background-color: rgba(0, 0, 0, 0.7);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  position: relative;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+
+.creature-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.creature-card.active {
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+}
+
+.creature-card.selected {
+  border-color: #4CAF50;
+  box-shadow: 0 0 15px rgba(76, 175, 80, 0.5);
+  transform: translateY(-3px);
+}
+
+.creature-card.defending::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 150, 255, 0.2);
+  pointer-events: none;
+}
+
+.creature-card.enemy {
+  border-color: #444;
+}
+
+.creature-card.enemy.selected {
+  border-color: #F44336;
+  box-shadow: 0 0 15px rgba(244, 67, 54, 0.5);
+}
+
+.creature-header {
+  padding: 5px;
+  background-color: rgba(0, 0, 0, 0.8);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.creature-name {
+  font-weight: bold;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 90px;
+}
+
+.creature-form {
+  font-size: 10px;
+  padding: 2px 4px;
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.creature-image-container {
+  height: 100px;
+  overflow: hidden;
+  position: relative;
+}
+
+.creature-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.health-bar-container {
+  height: 8px;
+  background-color: rgba(255, 0, 0, 0.3);
+  margin: 5px;
+  border-radius: 4px;
+  position: relative;
+}
+
+.health-bar {
+  height: 100%;
+  background-color: #4CAF50;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.health-text {
+  position: absolute;
+  top: -14px;
+  right: 0;
+  font-size: 10px;
+  color: white;
+  text-shadow: 0 0 2px black;
+}
+
+.stats-container {
+  padding: 5px;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 5px;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.stat.primary {
+  background-color: rgba(255, 255, 255, 0.3);
+  font-weight: bold;
+}
+
+.status-effects {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.status-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 12px;
+  background-color: rgba(0, 0, 0, 0.7);
+}
+
+.defending-shield {
+  position: absolute;
+  bottom: 5px;
+  right: 5px;
+  font-size: 18px;
+}
+
+/* Player hand styles */
+.player-hand {
+  padding: 10px 15px;
+  background-color: rgba(0, 0, 0, 0.5);
+  border-top: 1px solid #333;
+  transition: opacity 0.3s ease;
+}
+
+.player-hand.disabled {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.hand-title {
+  font-weight: bold;
+  margin-bottom: 10px;
+  color: #4CAF50;
+}
+
+.hand-cards {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 5px 0 15px 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.empty-hand {
+  padding: 20px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Action panel styles */
+.action-panel {
+  padding: 15px;
+  background-color: rgba(0, 0, 0, 0.7);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  transition: opacity 0.3s ease;
+}
+
+.action-panel.disabled {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.action-info {
+  padding: 10px;
+  text-align: center;
+  color: #aaa;
+}
+
+.selected-info {
+  margin-bottom: 10px;
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.selected-label, .target-label {
+  color: #aaa;
+}
+
+.selected-name, .target-name {
+  color: #fff;
+  font-weight: bold;
+  margin-right: 15px;
+}
+
+.action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+.action-btn {
+  padding: 8px 15px;
+  border: none;
+  border-radius: 5px;
+  background-color: #333;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: 'Orbitron', sans-serif;
+}
+
+.action-btn:hover:not(:disabled) {
+  background-color: #444;
+  transform: translateY(-2px);
+}
+
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.action-btn.deploy { background-color: #4CAF50; }
+.action-btn.attack { background-color: #F44336; }
+.action-btn.tool { background-color: #2196F3; }
+.action-btn.spell { background-color: #9C27B0; }
+.action-btn.defend { background-color: #FF9800; }
+.action-btn.end-turn { background-color: #607D8B; }
+
+/* Battle log styles */
+.battle-log {
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 10px 15px;
+  background-color: rgba(0, 0, 0, 0.8);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  -webkit-overflow-scrolling: touch;
+}
+
+.log-title {
+  font-weight: bold;
+  margin-bottom: 5px;
+  color: #FFC107;
+}
+
+.log-entries {
+  font-size: 12px;
+}
+
+.log-entry {
+  margin-bottom: 3px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.turn-indicator {
+  color: #aaa;
+  margin-right: 5px;
+  font-weight: bold;
+}
+
+/* Battle result styles */
+.battle-result {
+  padding: 20px;
+  text-align: center;
+}
+
+.result-header {
+  padding: 15px;
+  border-radius: 8px 8px 0 0;
+  margin: -20px -20px 20px -20px;
+}
+
+.result-header h2 {
+  margin: 0;
+  color: white;
+  font-size: 32px;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.result-content {
+  margin-bottom: 30px;
+}
+
+.result-message {
+  font-size: 18px;
+  margin-bottom: 25px;
+}
+
+.battle-stats {
+  background-color: rgba(0, 0, 0, 0.3);
+  padding: 15px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.battle-stats h3 {
+  margin-top: 0;
+  margin-bottom: 15px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 8px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 15px;
+}
+
+.stat-item {
+  background-color: rgba(0, 0, 0, 0.2);
+  padding: 10px;
+  border-radius: 5px;
+}
+
+.stat-label {
+  font-size: 14px;
+  color: #aaa;
+  margin-bottom: 5px;
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: bold;
+}
+
+.rewards-section {
+  margin-top: 25px;
+  background-color: rgba(76, 175, 80, 0.1);
+  padding: 15px;
+  border-radius: 8px;
+  border-left: 3px solid #4CAF50;
+}
+
+.result-actions {
+  display: flex;
+  gap: 15px;
+  justify-content: center;
+}
+
+.play-again-btn, .close-btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 5px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: 'Orbitron', sans-serif;
+}
+
+.play-again-btn {
+  color: white;
+}
+
+.close-btn {
+  background-color: #333;
+  color: white;
+}
+
+.play-again-btn:hover, .close-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Tool/Spell modal styles */
+.tool-spell-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.8);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.tool-spell-modal {
+  background-color: #222;
+  border-radius: 10px;
+  max-width: 800px;
+  width: 90%;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  padding: 15px;
+  background-color: #333;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header h3 {
+  margin: 0;
+  color: #fff;
+}
+
+.modal-header .close-btn {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.modal-content {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.items-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 15px;
+}
+
+.item-card {
+  background-color: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 15px;
+  display: flex;
+  gap: 15px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.item-card:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  transform: translateY(-2px);
+}
+
+.item-image {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 5px;
+}
+
+.item-details {
+  flex: 1;
+}
+
+.item-name {
+  font-weight: bold;
+  font-size: 16px;
+  margin-bottom: 5px;
+}
+
+.item-properties {
+  font-size: 12px;
+  color: #ccc;
+  margin-bottom: 10px;
+}
+
+.item-type, .item-effect {
+  display: inline-block;
+  margin-right: 10px;
+  background-color: rgba(0, 0, 0, 0.3);
+  padding: 3px 8px;
+  border-radius: 4px;
+  margin-bottom: 5px;
+}
+
+.item-description {
+  font-size: 14px;
+  color: #ddd;
+}
+
+/* Mobile adjustments */
+@media (max-width: 768px) {
+  .battle-header {
+    flex-direction: column;
+    gap: 10px;
+  }
+  
+  .battlefield-enemy, 
+  .battlefield-player {
+    padding: 10px 5px;
+    gap: 5px;
+  }
+  
+  .creature-slot {
+    width: 110px;
+    height: 180px;
+    margin: 3px;
+  }
+  
+  .battlefield-enemy.large-field .creature-slot,
+  .battlefield-enemy.large-field .creature-card {
+    width: 90px;
+    height: 150px;
+  }
+  
+  .action-buttons {
+    flex-direction: column;
+  }
+  
+  .stat-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .items-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .energy-displays {
+    width: 100%;
+    justify-content: space-around;
+  }
+}
